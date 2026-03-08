@@ -1,9 +1,19 @@
 import time
+import ctypes
 
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+
+# Import pynput for keyboard control
+try:
+    from pynput.keyboard import Controller, Key
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    print("Warning: pynput library not found. Keyboard control will be disabled.")
+    print("Install with: pip install pynput")
 
 # Constants
 CAMERA_INDEX = 0
@@ -24,6 +34,25 @@ MOVEMENT_THRESHOLD_RELEASE = 0.08  # Distance from reference to release key (hys
 
 # Hand tracking loss grace period
 HAND_LOSS_GRACE_PERIOD = 2.0  # seconds
+
+# Hand proximity threshold (normalized 3D distance)
+HAND_PROXIMITY_THRESHOLD = 0.2  # Maximum distance to consider same hand
+
+# Keyboard control configuration
+ENABLE_ACTUAL_KEYPRESSES = True  # Set to False to disable actual key presses (print only)
+ENABLE_DEBUG_OUTPUT = True  # Set to False to disable debug print statements
+
+# Key mapping configuration (easily customizable)
+KEY_MAPPING = {
+    "forward": "w",
+    "backward": "s",
+    "left": "a",
+    "right": "d"
+}
+
+# Picture-in-Picture mode configuration
+PIP_SCALE = 0.4  # Scale factor for PiP mode (40% of original size)
+PIP_WINDOW_NAME = "Gesture Recognition System"
 
 # Colors (BGR format)
 COLOR_LEFT_HAND = (255, 0, 0)  # Blue
@@ -63,13 +92,48 @@ result_lock = False
 
 # Keyboard control state
 keyboard_controller = None
-right_hand_state = {
+controlling_hand_state = {
     "is_palm_open": False,
-    "reference_point": None,  # (x, y, z) when open palm first detected
+    "reference_point": None,  # (x, y) when open palm first detected
+    "last_palm_position": None,  # (x, y, z) 3D position for tracking same hand
     "active_keys": set(),  # Currently pressed keys
-    "last_seen_time": None,  # Last time right hand was detected
+    "last_seen_time": None,  # Last time controlling hand was detected
     "control_active": False,  # Whether keyboard control is active
 }
+
+# Picture-in-Picture mode state
+pip_mode = False
+
+
+def set_window_always_on_top(window_name, enable=True):
+    """
+    Set the OpenCV window to always stay on top of other windows (Windows only).
+
+    Args:
+        window_name: Name of the OpenCV window
+        enable: True to enable always-on-top, False to disable
+    """
+    try:
+        # Windows API constants
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+
+        # Get window handle using FindWindow
+        hwnd = ctypes.windll.user32.FindWindowW(None, window_name)
+
+        if hwnd:
+            # Set window position with TOPMOST or NOTOPMOST flag
+            flag = HWND_TOPMOST if enable else HWND_NOTOPMOST
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE
+            )
+            return True
+        return False
+    except Exception:
+        # Silent failure for non-Windows platforms or errors
+        return False
 
 
 def is_hand_open_palm(hand_landmarks):
@@ -132,20 +196,20 @@ def calculate_palm_center(hand_landmarks):
 
 def update_keyboard_controls(hand_landmarks):
     """
-    Update keyboard controls based on right hand position relative to reference point.
+    Update keyboard controls based on controlling hand position relative to reference point.
     Supports diagonal movement by pressing multiple keys.
     """
-    global right_hand_state, keyboard_controller
+    global controlling_hand_state, keyboard_controller
 
     if (
-        not right_hand_state["control_active"]
-        or not right_hand_state["reference_point"]
+        not controlling_hand_state["control_active"]
+        or not controlling_hand_state["reference_point"]
     ):
         return
 
     # Calculate current palm center position
     palm_center_x, palm_center_y = calculate_palm_center(hand_landmarks)
-    ref_x, ref_y = right_hand_state["reference_point"]
+    ref_x, ref_y = controlling_hand_state["reference_point"]
 
     # Calculate deltas from reference point
     delta_x = palm_center_x - ref_x
@@ -154,133 +218,262 @@ def update_keyboard_controls(hand_landmarks):
     # Determine which keys should be active based on current thresholds
     target_keys = set()
 
+    # Get configured keys
+    key_right = KEY_MAPPING["right"]
+    key_left = KEY_MAPPING["left"]
+    key_forward = KEY_MAPPING["forward"]
+    key_backward = KEY_MAPPING["backward"]
+
     # Check X-axis (left/right)
     if delta_x < -MOVEMENT_THRESHOLD_ACTIVATE:
-        target_keys.add("d")  # Move left
+        target_keys.add(key_left)  # Move left
     elif delta_x > MOVEMENT_THRESHOLD_ACTIVATE:
-        target_keys.add("a")  # Move right
+        target_keys.add(key_right)  # Move right
     else:
         # Hysteresis: only release if within smaller threshold
         if (
-            "a" in right_hand_state["active_keys"]
+            key_right in controlling_hand_state["active_keys"]
             and delta_x > -MOVEMENT_THRESHOLD_RELEASE
         ):
             pass  # Will be removed below
-        elif "a" in right_hand_state["active_keys"]:
-            target_keys.add("a")
+        elif key_right in controlling_hand_state["active_keys"]:
+            target_keys.add(key_right)
 
         if (
-            "d" in right_hand_state["active_keys"]
+            key_left in controlling_hand_state["active_keys"]
             and delta_x < MOVEMENT_THRESHOLD_RELEASE
         ):
             pass  # Will be removed below
-        elif "d" in right_hand_state["active_keys"]:
-            target_keys.add("d")
+        elif key_left in controlling_hand_state["active_keys"]:
+            target_keys.add(key_left)
 
     # Check Y-axis (up/down - vertical movement)
-    # Smaller Y value = palm moved UP = W key (forward)
-    # Larger Y value = palm moved DOWN = S key (backward)
+    # Smaller Y value = palm moved UP = forward key
+    # Larger Y value = palm moved DOWN = backward key
     if delta_y < -MOVEMENT_THRESHOLD_ACTIVATE:
-        target_keys.add("w")  # Palm moved up
+        target_keys.add(key_forward)  # Palm moved up
     elif delta_y > MOVEMENT_THRESHOLD_ACTIVATE:
-        target_keys.add("s")  # Palm moved down
+        target_keys.add(key_backward)  # Palm moved down
     else:
         # Hysteresis for Y-axis
         if (
-            "w" in right_hand_state["active_keys"]
+            key_forward in controlling_hand_state["active_keys"]
             and delta_y > -MOVEMENT_THRESHOLD_RELEASE
         ):
             pass
-        elif "w" in right_hand_state["active_keys"]:
-            target_keys.add("w")
+        elif key_forward in controlling_hand_state["active_keys"]:
+            target_keys.add(key_forward)
 
         if (
-            "s" in right_hand_state["active_keys"]
+            key_backward in controlling_hand_state["active_keys"]
             and delta_y < MOVEMENT_THRESHOLD_RELEASE
         ):
             pass
-        elif "s" in right_hand_state["active_keys"]:
-            target_keys.add("s")
+        elif key_backward in controlling_hand_state["active_keys"]:
+            target_keys.add(key_backward)
 
     # Press new keys
-    for key in target_keys - right_hand_state["active_keys"]:
-        print(f"KEY PRESS: {key.upper()}")
+    for key in target_keys - controlling_hand_state["active_keys"]:
+        if ENABLE_DEBUG_OUTPUT:
+            print(f"KEY PRESS: {key.upper()}")
+
+        # Actually press the key
+        if keyboard_controller is not None:
+            try:
+                keyboard_controller.press(key)
+            except:
+                pass  # Silent failure
 
     # Release old keys
-    for key in right_hand_state["active_keys"] - target_keys:
-        print(f"KEY RELEASE: {key.upper()}")
+    for key in controlling_hand_state["active_keys"] - target_keys:
+        if ENABLE_DEBUG_OUTPUT:
+            print(f"KEY RELEASE: {key.upper()}")
+
+        # Actually release the key
+        if keyboard_controller is not None:
+            try:
+                keyboard_controller.release(key)
+            except:
+                pass  # Silent failure
 
     # Update active keys
-    right_hand_state["active_keys"] = target_keys
+    controlling_hand_state["active_keys"] = target_keys
 
 
-def process_right_hand_control(detection_result):
+def find_closest_left_hand(detection_result):
     """
-    Process right hand for keyboard control.
-    Manages fist detection, reference point setting, and hand tracking loss.
+    Find the closest left hand to the camera based on Z-depth.
+
+    Args:
+        detection_result: MediaPipe hand detection result
+
+    Returns:
+        tuple: (hand_landmarks, hand_index) for closest left hand, or (None, None) if no left hand found
     """
-    global right_hand_state
+    if not detection_result or not detection_result.hand_landmarks:
+        return None, None
+
+    closest_hand = None
+    closest_index = None
+    min_z_depth = float('inf')
+
+    for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
+        handedness = detection_result.handedness[idx][0]
+
+        # Only consider left hands
+        if handedness.category_name == "Left":
+            # Calculate average Z-depth using palm center points
+            palm_center_x, palm_center_y = calculate_palm_center(hand_landmarks)
+
+            # Get Z values from the palm landmarks (wrist and finger bases)
+            wrist = hand_landmarks[0]
+            index_base = hand_landmarks[5]
+            middle_base = hand_landmarks[9]
+            ring_base = hand_landmarks[13]
+            pinky_base = hand_landmarks[17]
+
+            avg_z = (wrist.z + index_base.z + middle_base.z + ring_base.z + pinky_base.z) / 5
+
+            # Smaller Z = closer to camera
+            if avg_z < min_z_depth:
+                min_z_depth = avg_z
+                closest_hand = hand_landmarks
+                closest_index = idx
+
+    return closest_hand, closest_index
+
+
+def is_same_hand(hand_landmarks, last_position):
+    """
+    Check if the current hand is the same as the previously tracked hand using proximity.
+
+    Args:
+        hand_landmarks: Current hand landmarks
+        last_position: Last known (x, y, z) position of tracked hand
+
+    Returns:
+        bool: True if hand is within proximity threshold of last position
+    """
+    if last_position is None or hand_landmarks is None:
+        return False
+
+    # Calculate current palm center position (including Z)
+    palm_center_x, palm_center_y = calculate_palm_center(hand_landmarks)
+
+    # Get average Z from palm landmarks
+    wrist = hand_landmarks[0]
+    index_base = hand_landmarks[5]
+    middle_base = hand_landmarks[9]
+    ring_base = hand_landmarks[13]
+    pinky_base = hand_landmarks[17]
+    palm_center_z = (wrist.z + index_base.z + middle_base.z + ring_base.z + pinky_base.z) / 5
+
+    # Calculate 3D distance from last position
+    last_x, last_y, last_z = last_position
+    distance = (
+        (palm_center_x - last_x) ** 2 +
+        (palm_center_y - last_y) ** 2 +
+        (palm_center_z - last_z) ** 2
+    ) ** 0.5
+
+    return distance < HAND_PROXIMITY_THRESHOLD
+
+
+def process_left_hand_control(detection_result):
+    """
+    Process left hand for keyboard control with multi-person support.
+    Uses closest left hand to camera. Manages palm detection, reference point setting,
+    and hand tracking loss with proximity-based persistence.
+    """
+    global controlling_hand_state
 
     current_time = time.time()
-    right_hand_found = False
 
-    if detection_result and detection_result.hand_landmarks:
-        # Find right hand
-        for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
-            handedness = detection_result.handedness[idx][0]
-            if handedness.category_name == "Right":
-                right_hand_found = True
-                right_hand_state["last_seen_time"] = current_time
+    # Find the closest left hand to camera
+    left_hand_landmarks, left_hand_index = find_closest_left_hand(detection_result)
 
-                # Check palm state
-                is_palm_open = is_hand_open_palm(hand_landmarks)
+    if left_hand_landmarks is not None:
+        # Calculate current palm position (3D)
+        palm_center_x, palm_center_y = calculate_palm_center(left_hand_landmarks)
+        wrist = left_hand_landmarks[0]
+        index_base = left_hand_landmarks[5]
+        middle_base = left_hand_landmarks[9]
+        ring_base = left_hand_landmarks[13]
+        pinky_base = left_hand_landmarks[17]
+        palm_center_z = (wrist.z + index_base.z + middle_base.z + ring_base.z + pinky_base.z) / 5
+        current_palm_position = (palm_center_x, palm_center_y, palm_center_z)
 
-                # Set reference point only if not already set
-                if is_palm_open and right_hand_state["reference_point"] is None:
-                    palm_center_x, palm_center_y = calculate_palm_center(hand_landmarks)
-                    right_hand_state["reference_point"] = (palm_center_x, palm_center_y)
-                    print(
-                        f"Reference point set - palm center locked at ({palm_center_x:.3f}, {palm_center_y:.3f})"
-                    )
+        # Check if this is the same hand we were tracking (if control is active)
+        if controlling_hand_state["control_active"]:
+            # Verify this is the same hand using proximity
+            if not is_same_hand(left_hand_landmarks, controlling_hand_state["last_palm_position"]):
+                # Different hand detected - check if we're in grace period
+                if controlling_hand_state["last_seen_time"]:
+                    time_since_seen = current_time - controlling_hand_state["last_seen_time"]
+                    if time_since_seen <= HAND_LOSS_GRACE_PERIOD:
+                        # In grace period - ignore different hand
+                        return
+                    # Grace period expired - this new hand can take control
 
-                # Open palm detected - activate control
-                if is_palm_open and not right_hand_state["is_palm_open"]:
-                    right_hand_state["control_active"] = True
-                    right_hand_state["is_palm_open"] = True
-                    print("Control activated - open palm detected")
+        # Update tracking
+        controlling_hand_state["last_seen_time"] = current_time
+        controlling_hand_state["last_palm_position"] = current_palm_position
 
-                # Palm is open - update controls (no deactivation on close)
-                if is_palm_open and right_hand_state["is_palm_open"]:
-                    update_keyboard_controls(hand_landmarks)
+        # Check palm state
+        is_palm_open = is_hand_open_palm(left_hand_landmarks)
 
-                # Palm closed but control stays active if reference exists
-                elif not is_palm_open and right_hand_state["is_palm_open"]:
-                    right_hand_state["is_palm_open"] = False
-                    # Note: control_active and reference_point stay set
-                    # Keys will continue to be controlled based on hand position
+        # Set reference point only if not already set
+        if is_palm_open and controlling_hand_state["reference_point"] is None:
+            controlling_hand_state["reference_point"] = (palm_center_x, palm_center_y)
+            print(
+                f"Reference point set - palm center locked at ({palm_center_x:.3f}, {palm_center_y:.3f})"
+            )
 
-                break
+        # Open palm detected - activate control
+        if is_palm_open and not controlling_hand_state["is_palm_open"]:
+            controlling_hand_state["control_active"] = True
+            controlling_hand_state["is_palm_open"] = True
+            print("Control activated - open palm detected")
 
-    # Handle hand tracking loss with grace period
-    if not right_hand_found and right_hand_state["control_active"]:
-        if right_hand_state["last_seen_time"]:
-            time_since_seen = current_time - right_hand_state["last_seen_time"]
-            if time_since_seen > HAND_LOSS_GRACE_PERIOD:
-                print("Hand lost - releasing controls")
-                release_all_keys()
-                right_hand_state["control_active"] = False
-                right_hand_state["is_palm_open"] = False
-                # Keep reference_point for potential return
+        # Palm is open - update controls (no deactivation on close)
+        if is_palm_open and controlling_hand_state["is_palm_open"]:
+            update_keyboard_controls(left_hand_landmarks)
+
+        # Palm closed but control stays active if reference exists
+        elif not is_palm_open and controlling_hand_state["is_palm_open"]:
+            controlling_hand_state["is_palm_open"] = False
+            # Note: control_active and reference_point stay set
+            # Keys will continue to be controlled based on hand position
+
+    else:
+        # No left hand found - handle tracking loss with grace period
+        if controlling_hand_state["control_active"]:
+            if controlling_hand_state["last_seen_time"]:
+                time_since_seen = current_time - controlling_hand_state["last_seen_time"]
+                if time_since_seen > HAND_LOSS_GRACE_PERIOD:
+                    print("Hand lost - releasing controls")
+                    release_all_keys()
+                    controlling_hand_state["control_active"] = False
+                    controlling_hand_state["is_palm_open"] = False
+                    # Keep reference_point and last_palm_position for potential return
 
 
 def release_all_keys():
     """Release all currently pressed keys."""
-    global right_hand_state, keyboard_controller
+    global controlling_hand_state, keyboard_controller
 
-    for key in right_hand_state["active_keys"]:
-        print(f"KEY RELEASE: {key.upper()}")
+    for key in controlling_hand_state["active_keys"]:
+        if ENABLE_DEBUG_OUTPUT:
+            print(f"KEY RELEASE: {key.upper()}")
 
-    right_hand_state["active_keys"] = set()
+        # Actually release the key
+        if keyboard_controller is not None:
+            try:
+                keyboard_controller.release(key)
+            except:
+                pass  # Silent failure
+
+    controlling_hand_state["active_keys"] = set()
 
 
 def get_optimal_camera_settings(cap):
@@ -394,43 +587,54 @@ def draw_landmarks_on_image(image, detection_result):
             cv2.LINE_AA,
         )
 
-        # Draw control status for right hand
-        if hand_label == "Right" and right_hand_state["control_active"]:
-            status_text = (
-                "CONTROLLING - PALM"
-                if right_hand_state["is_palm_open"]
-                else "CONTROLLING"
-            )
-            cv2.putText(
-                image,
-                status_text,
-                (wrist_x - 50, wrist_y + 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0) if right_hand_state["is_palm_open"] else (0, 200, 200),
-                2,
-                cv2.LINE_AA,
-            )
+        # Draw control status for left hand
+        if hand_label == "Left" and controlling_hand_state["control_active"]:
+            # Check if this is the controlling hand by proximity
+            is_controlling_hand = is_same_hand(hand_landmarks, controlling_hand_state["last_palm_position"])
 
-            # Draw reference point if active
-            if (
-                right_hand_state["reference_point"]
-                and right_hand_state["control_active"]
-            ):
-                ref_x, ref_y = right_hand_state["reference_point"]
-                ref_pixel_x = int(ref_x * width)
-                ref_pixel_y = int(ref_y * height)
-                cv2.circle(image, (ref_pixel_x, ref_pixel_y), 10, (0, 255, 255), 2)
+            if is_controlling_hand or controlling_hand_state["last_palm_position"] is None:
+                status_text = (
+                    "CONTROLLING - PALM"
+                    if controlling_hand_state["is_palm_open"]
+                    else "CONTROLLING"
+                )
                 cv2.putText(
                     image,
-                    "REF",
-                    (ref_pixel_x + 15, ref_pixel_y),
+                    status_text,
+                    (wrist_x - 50, wrist_y + 20),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 255, 255),
-                    1,
+                    0.6,
+                    (0, 255, 0) if controlling_hand_state["is_palm_open"] else (0, 200, 200),
+                    2,
                     cv2.LINE_AA,
                 )
+
+                # Draw reference point if active
+                if (
+                    controlling_hand_state["reference_point"]
+                    and controlling_hand_state["control_active"]
+                ):
+                    ref_x, ref_y = controlling_hand_state["reference_point"]
+                    ref_pixel_x = int(ref_x * width)
+                    ref_pixel_y = int(ref_y * height)
+                    cv2.circle(image, (ref_pixel_x, ref_pixel_y), 10, (0, 255, 255), 2)
+                    cv2.putText(
+                        image,
+                        "REF",
+                        (ref_pixel_x + 15, ref_pixel_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (0, 255, 255),
+                        1,
+                        cv2.LINE_AA,
+                    )
+
+                    # Draw directional arrow when keys are pressed
+                    draw_direction_arrow(
+                        image,
+                        controlling_hand_state["reference_point"],
+                        controlling_hand_state["active_keys"]
+                    )
 
     return image
 
@@ -451,11 +655,83 @@ def draw_fps(image, fps):
     )
 
 
+def draw_direction_arrow(image, reference_point, active_keys):
+    """
+    Draw a directional arrow near the reference point showing current movement direction.
+    Only draws when keys are actively pressed.
+
+    Args:
+        image: The image to draw on
+        reference_point: Tuple of (x, y) normalized coordinates
+        active_keys: Set of currently pressed keys
+    """
+    if not active_keys or not reference_point:
+        return
+
+    # Arrow visual properties
+    ARROW_COLOR = (0, 255, 255)  # Cyan to match reference point
+    ARROW_LENGTH = 120  # pixels
+    ARROW_THICKNESS = 3
+    ARROW_TIP_LENGTH = 0.3  # Proportion of arrow length
+
+    # Get image dimensions
+    height, width, _ = image.shape
+
+    # Convert reference point to pixel coordinates
+    ref_x = int(reference_point[0] * width)
+    ref_y = int(reference_point[1] * height)
+
+    # Calculate direction vector based on active keys
+    direction_x = 0
+    direction_y = 0
+
+    # Get configured keys
+    key_right = KEY_MAPPING["right"]
+    key_left = KEY_MAPPING["left"]
+    key_forward = KEY_MAPPING["forward"]
+    key_backward = KEY_MAPPING["backward"]
+
+    # X-axis mapping (left/right in screen space)
+    if key_right in active_keys:
+        direction_x += 1  # Right on screen
+    if key_left in active_keys:
+        direction_x -= 1  # Left on screen
+
+    # Y-axis mapping (up/down in screen space)
+    if key_forward in active_keys:
+        direction_y -= 1  # Up on screen
+    if key_backward in active_keys:
+        direction_y += 1  # Down on screen
+
+    # If no direction, don't draw
+    if direction_x == 0 and direction_y == 0:
+        return
+
+    # Normalize direction vector and scale to arrow length
+    magnitude = (direction_x ** 2 + direction_y ** 2) ** 0.5
+    norm_x = direction_x / magnitude
+    norm_y = direction_y / magnitude
+
+    # Calculate arrow end point
+    end_x = int(ref_x + norm_x * ARROW_LENGTH)
+    end_y = int(ref_y + norm_y * ARROW_LENGTH)
+
+    # Draw the arrow
+    cv2.arrowedLine(
+        image,
+        (ref_x, ref_y),  # Start at reference point
+        (end_x, end_y),  # End at calculated direction
+        ARROW_COLOR,
+        ARROW_THICKNESS,
+        tipLength=ARROW_TIP_LENGTH
+    )
+
+
 def main():
     """
     Main function to run the gesture recognition system.
     """
-    global detection_result
+    global detection_result, pip_mode
 
     # Initialize camera
     print("Initializing camera...")
@@ -471,10 +747,21 @@ def main():
     # Configure camera settings
     width, height = get_optimal_camera_settings(cap)
 
-    # Initialize keyboard controller (using print for now)
+    # Initialize keyboard controller
     global keyboard_controller
-    keyboard_controller = True  # Flag to indicate controller is ready
-    print("Keyboard controller initialized (print mode)")
+    if PYNPUT_AVAILABLE and ENABLE_ACTUAL_KEYPRESSES:
+        try:
+            keyboard_controller = Controller()
+            print("Keyboard controller initialized (actual key press mode)")
+        except Exception as e:
+            keyboard_controller = None
+            print("Keyboard controller initialization failed - continuing in print-only mode")
+    else:
+        keyboard_controller = None
+        if not PYNPUT_AVAILABLE:
+            print("Keyboard controller not available - print-only mode")
+        else:
+            print("Keyboard controller disabled - print-only mode")
 
     # Initialize MediaPipe HandLandmarker
     print("Initializing HandLandmarker...")
@@ -501,10 +788,18 @@ def main():
     print("Controls:")
     print("  - Press 'Q' or 'ESC' to quit")
     print("  - Press 'R' to reset reference point")
-    print("  - Show OPEN PALM with RIGHT hand to set/activate keyboard control")
+    print("  - Show OPEN PALM with LEFT hand (closest to camera) to set/activate keyboard control")
     print("  - Move hand: LEFT/RIGHT (A/D), FORWARD/BACK (W/S)")
     print("  - Control stays active once reference point is set")
+    print("  - Multi-person support: Closest left hand to camera controls")
+    print("  - Press 'P' to toggle Picture-in-Picture mode (always-on-top)")
     print("\nStarting camera feed...\n")
+
+    # Create OpenCV window with NORMAL flag (resizable)
+    cv2.namedWindow(PIP_WINDOW_NAME, cv2.WINDOW_NORMAL)
+
+    # Set initial window size (full size by default)
+    cv2.resizeWindow(PIP_WINDOW_NAME, width, height)
 
     # FPS calculation variables
     prev_time = time.time()
@@ -535,8 +830,8 @@ def main():
             # Draw landmarks from the latest detection result
             if detection_result:
                 frame = draw_landmarks_on_image(frame, detection_result)
-                # Process right hand for keyboard control
-                process_right_hand_control(detection_result)
+                # Process left hand for keyboard control
+                process_left_hand_control(detection_result)
 
             # Calculate FPS
             current_time = time.time()
@@ -546,8 +841,17 @@ def main():
             # Draw FPS on frame
             draw_fps(frame, fps)
 
+            # Scale frame for PiP mode if enabled (keep original for processing)
+            if pip_mode:
+                # Scale down for display
+                pip_width = int(frame.shape[1] * PIP_SCALE)
+                pip_height = int(frame.shape[0] * PIP_SCALE)
+                display_frame = cv2.resize(frame, (pip_width, pip_height), interpolation=cv2.INTER_AREA)
+            else:
+                display_frame = frame
+
             # Display frame
-            cv2.imshow("Gesture Recognition System", frame)
+            cv2.imshow(PIP_WINDOW_NAME, display_frame)
 
             # Check for quit commands
             key = cv2.waitKey(1) & 0xFF
@@ -557,10 +861,27 @@ def main():
             elif key == ord("r") or key == ord("R"):
                 # Reset reference point
                 release_all_keys()
-                right_hand_state["reference_point"] = None
-                right_hand_state["control_active"] = False
-                right_hand_state["is_palm_open"] = False
-                print("\nReference point reset - show open palm to set new reference")
+                controlling_hand_state["reference_point"] = None
+                controlling_hand_state["last_palm_position"] = None
+                controlling_hand_state["control_active"] = False
+                controlling_hand_state["is_palm_open"] = False
+                print("\nReference point reset - show open palm with left hand to set new reference")
+            elif key == ord("p") or key == ord("P"):
+                # Toggle Picture-in-Picture mode
+                pip_mode = not pip_mode
+
+                if pip_mode:
+                    # Enable PiP: scale down window and set always-on-top
+                    pip_width = int(width * PIP_SCALE)
+                    pip_height = int(height * PIP_SCALE)
+                    cv2.resizeWindow(PIP_WINDOW_NAME, pip_width, pip_height)
+                    set_window_always_on_top(PIP_WINDOW_NAME, True)
+                    print("\nPicture-in-Picture mode ENABLED (always-on-top)")
+                else:
+                    # Disable PiP: restore full size and remove always-on-top
+                    cv2.resizeWindow(PIP_WINDOW_NAME, width, height)
+                    set_window_always_on_top(PIP_WINDOW_NAME, False)
+                    print("\nPicture-in-Picture mode DISABLED (normal window)")
 
             frame_count += 1
 
