@@ -119,16 +119,51 @@ def set_window_always_on_top(window_name, enable=True):
         HWND_NOTOPMOST = -2
         SWP_NOMOVE = 0x0002
         SWP_NOSIZE = 0x0001
+        SWP_NOACTIVATE = 0x0010  # Don't activate/focus the window
 
         # Get window handle using FindWindow
         hwnd = ctypes.windll.user32.FindWindowW(None, window_name)
 
         if hwnd:
             # Set window position with TOPMOST or NOTOPMOST flag
+            # Include SWP_NOACTIVATE to prevent stealing focus from game
             flag = HWND_TOPMOST if enable else HWND_NOTOPMOST
             ctypes.windll.user32.SetWindowPos(
-                hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE
+                hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
             )
+            return True
+        return False
+    except Exception:
+        # Silent failure for non-Windows platforms or errors
+        return False
+
+
+def set_window_no_focus(window_name):
+    """
+    Make the OpenCV window non-focusable so it never steals focus (Windows only).
+    This prevents the window from accepting keyboard focus while still being visible.
+
+    Args:
+        window_name: Name of the OpenCV window
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Windows API constants
+        GWL_EXSTYLE = -20  # Extended window style
+        WS_EX_NOACTIVATE = 0x08000000  # Window won't be activated when clicked
+
+        # Get window handle
+        hwnd = ctypes.windll.user32.FindWindowW(None, window_name)
+
+        if hwnd:
+            # Get current extended window style
+            current_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+
+            # Add WS_EX_NOACTIVATE to prevent focus stealing
+            new_style = current_style | WS_EX_NOACTIVATE
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
             return True
         return False
     except Exception:
@@ -224,28 +259,28 @@ def update_keyboard_controls(hand_landmarks):
     key_forward = KEY_MAPPING["forward"]
     key_backward = KEY_MAPPING["backward"]
 
-    # Check X-axis (left/right)
+    # Check X-axis (left/right) - INVERTED: palm left = D, palm right = A
     if delta_x < -MOVEMENT_THRESHOLD_ACTIVATE:
-        target_keys.add(key_left)  # Move left
+        target_keys.add(key_right)  # Palm moved left → D key
     elif delta_x > MOVEMENT_THRESHOLD_ACTIVATE:
-        target_keys.add(key_right)  # Move right
+        target_keys.add(key_left)  # Palm moved right → A key
     else:
         # Hysteresis: only release if within smaller threshold
         if (
-            key_right in controlling_hand_state["active_keys"]
-            and delta_x > -MOVEMENT_THRESHOLD_RELEASE
-        ):
-            pass  # Will be removed below
-        elif key_right in controlling_hand_state["active_keys"]:
-            target_keys.add(key_right)
-
-        if (
             key_left in controlling_hand_state["active_keys"]
-            and delta_x < MOVEMENT_THRESHOLD_RELEASE
+            and delta_x > -MOVEMENT_THRESHOLD_RELEASE
         ):
             pass  # Will be removed below
         elif key_left in controlling_hand_state["active_keys"]:
             target_keys.add(key_left)
+
+        if (
+            key_right in controlling_hand_state["active_keys"]
+            and delta_x < MOVEMENT_THRESHOLD_RELEASE
+        ):
+            pass  # Will be removed below
+        elif key_right in controlling_hand_state["active_keys"]:
+            target_keys.add(key_right)
 
     # Check Y-axis (up/down - vertical movement)
     # Smaller Y value = palm moved UP = forward key
@@ -875,8 +910,10 @@ def main():
                     pip_width = int(width * PIP_SCALE)
                     pip_height = int(height * PIP_SCALE)
                     cv2.resizeWindow(PIP_WINDOW_NAME, pip_width, pip_height)
+                    # Small delay to let window resize complete
+                    time.sleep(0.05)
                     set_window_always_on_top(PIP_WINDOW_NAME, True)
-                    print("\nPicture-in-Picture mode ENABLED (always-on-top)")
+                    print("\nPicture-in-Picture mode ENABLED (always-on-top, no-focus)")
                 else:
                     # Disable PiP: restore full size and remove always-on-top
                     cv2.resizeWindow(PIP_WINDOW_NAME, width, height)
