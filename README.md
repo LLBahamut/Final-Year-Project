@@ -49,12 +49,12 @@ python main.py
 
 ## How It Works
 
-1. **Capture** — Frames are read from the webcam at 1280×720 and horizontally flipped for a natural mirror view.
-2. **Detect** — Each frame is passed asynchronously to MediaPipe's `HandLandmarker`, which returns up to 2 sets of 21 3D landmarks.
-3. **Palm state** — The system checks whether at least 3 fingers are extended beyond their base joints. If so, the hand is considered an open palm and control is activated.
-4. **Reference lock** — When the palm first opens, the current palm-centre position is saved as a reference point.
-5. **Movement mapping** — Subsequent palm-centre positions are compared to the reference. Displacement beyond the activation threshold (`MOVEMENT_THRESHOLD_ACTIVATE`) triggers the corresponding WASD key; displacement below the release threshold (`MOVEMENT_THRESHOLD_RELEASE`) releases it. This hysteresis prevents key jitter.
-6. **Key injection** — Active keys are sent to the OS via `pynput`.
+1. **Capture:** Frames are read from the webcam at 1280×720 and horizontally flipped for a natural mirror view.
+2. **Detect:** Each frame is passed asynchronously to MediaPipe's `HandLandmarker`, which returns up to 2 sets of 21 3D landmarks.
+3. **Palm State:** The system checks whether at least 3 fingers are extended beyond their base joints. If so, the hand is considered an open palm and control is activated.
+4. **Reference Lock:** When the palm first opens, the current palm-centre position is saved as a reference point.
+5. **Movement Mapping:** Subsequent palm-centre positions are compared to the reference. Displacement beyond the activation threshold (`MOVEMENT_THRESHOLD_ACTIVATE`) triggers the corresponding WASD key; displacement below the release threshold (`MOVEMENT_THRESHOLD_RELEASE`) releases it. This hysteresis prevents key jitter.
+6. **Key Injection:** Active keys are sent to the OS via `pynput`.
 
 ---
 
