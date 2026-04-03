@@ -24,16 +24,20 @@ A real-time hand gesture recognition system that translates webcam hand movement
 
 ## Installation
 
+1. Clone the repository
 ```bash
-# 1. Clone the repository
-git clone <repo-url>
-cd "Final Year Project"
+git clone https://github.com/LLBahamut/Final-Year-Project.git
+cd "Final-Year-Project"
+```
 
-# 2. Create and activate a virtual environment
+2. Create and activate a virtual environment
+```bash
 python -m venv .venv
 .venv\Scripts\activate
+```
 
-# 3. Install dependencies
+3. Install dependencies
+```bash
 pip install -r requirements.txt
 ```
 
