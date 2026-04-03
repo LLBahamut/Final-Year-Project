@@ -10,7 +10,7 @@ A real-time hand gesture recognition system that translates webcam hand movement
 
 ## Demo
 
-> _Add a GIF or screenshot here_
+> Work in progress!
 
 ---
 
