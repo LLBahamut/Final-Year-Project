@@ -1,5 +1,7 @@
 import time
 import ctypes
+import argparse
+import json
 
 import cv2
 import mediapipe as mp
@@ -187,7 +189,7 @@ def is_hand_open_palm(hand_landmarks):
     Detect if hand is in open palm position by checking if fingers are extended.
     Returns True if at least 3 of 4 fingers (index, middle, ring, pinky) are extended.
     Thumb is ignored for relaxed palm detection.
-    """
+    """  
     wrist = hand_landmarks[0]
     fingers_extended = 0
 
@@ -875,11 +877,74 @@ def draw_direction_arrow(image, reference_point, active_keys):
     )
 
 
+def _apply_config(config_path):
+    """Override module-level constants from a JSON config file."""
+    with open(config_path, "r") as f:
+        cfg = json.load(f)
+
+    g = globals()
+
+    mapping = {
+        "camera_index": "CAMERA_INDEX",
+        "desired_width": "DESIRED_WIDTH",
+        "desired_height": "DESIRED_HEIGHT",
+        "min_hand_detection_confidence": "MIN_HAND_DETECTION_CONFIDENCE",
+        "min_hand_presence_confidence": "MIN_HAND_PRESENCE_CONFIDENCE",
+        "min_tracking_confidence": "MIN_TRACKING_CONFIDENCE",
+        "palm_extension_threshold": "PALM_EXTENSION_THRESHOLD",
+        "palm_min_fingers": "PALM_MIN_FINGERS",
+        "movement_threshold_activate": "MOVEMENT_THRESHOLD_ACTIVATE",
+        "movement_threshold_release": "MOVEMENT_THRESHOLD_RELEASE",
+        "hand_loss_grace_period": "HAND_LOSS_GRACE_PERIOD",
+        "hand_proximity_threshold": "HAND_PROXIMITY_THRESHOLD",
+        "enable_actual_keypresses": "ENABLE_ACTUAL_KEYPRESSES",
+        "enable_debug_output": "ENABLE_DEBUG_OUTPUT",
+        "pip_scale": "PIP_SCALE",
+        "wasd_overlay_enabled": "WASD_OVERLAY_ENABLED",
+        "wasd_key_size": "WASD_KEY_SIZE",
+        "wasd_key_spacing": "WASD_KEY_SPACING",
+        "wasd_overlay_x": "WASD_OVERLAY_X",
+        "wasd_overlay_y_offset": "WASD_OVERLAY_Y_OFFSET",
+    }
+
+    for cfg_key, const_name in mapping.items():
+        if cfg_key in cfg:
+            g[const_name] = cfg[cfg_key]
+
+    color_mapping = {
+        "color_left_hand": "COLOR_LEFT_HAND",
+        "color_right_hand": "COLOR_RIGHT_HAND",
+        "wasd_key_color_inactive": "WASD_KEY_COLOR_INACTIVE",
+        "wasd_key_color_active": "WASD_KEY_COLOR_ACTIVE",
+        "wasd_text_color_inactive": "WASD_TEXT_COLOR_INACTIVE",
+        "wasd_text_color_active": "WASD_TEXT_COLOR_ACTIVE",
+    }
+
+    for cfg_key, const_name in color_mapping.items():
+        if cfg_key in cfg:
+            g[const_name] = tuple(cfg[cfg_key])
+
+    g["KEY_MAPPING"] = {
+        "forward": cfg.get("key_forward", "w"),
+        "backward": cfg.get("key_backward", "s"),
+        "left": cfg.get("key_left", "a"),
+        "right": cfg.get("key_right", "d"),
+    }
+
+
 def main():
     """
     Main function to run the gesture recognition system.
     """
     global detection_result, pip_mode
+
+    # Load config from file if provided
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=None)
+    args = parser.parse_args()
+
+    if args.config:
+        _apply_config(args.config)
 
     # Initialize camera
     print("Initializing camera...")
