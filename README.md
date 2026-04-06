@@ -3,6 +3,8 @@
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.10-green)
 ![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10-orange)
+![PyQt6](https://img.shields.io/badge/PyQt6-red)
+
 
 A real-time hand gesture recognition system that translates webcam hand movements into WASD keyboard inputs. Built with MediaPipe and OpenCV, it enables hands-free control of games or any application that uses WASD movement keys.
 
@@ -133,3 +135,4 @@ Final Year Project/
 | [OpenCV](https://opencv.org/) | 4.10.0 | Video capture, frame processing, on-screen rendering |
 | [NumPy](https://numpy.org/) | ≥1.24 | Numerical operations and distance calculations |
 | [pynput](https://pynput.readthedocs.io/) | latest | OS-level keyboard input injection |
+| [PyQt6](https://pypi.org/project/PyQt6/) | latest | GUI rendering |
