@@ -6,8 +6,8 @@ import json
 class GestureConfig:
     # Camera
     camera_index: int = 0
-    desired_width: int = 1280
-    desired_height: int = 720
+    desired_width: int = 1920
+    desired_height: int = 1080
 
     # MediaPipe detection thresholds
     min_hand_detection_confidence: float = 0.7

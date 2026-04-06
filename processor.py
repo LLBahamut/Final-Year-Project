@@ -1,0 +1,602 @@
+import os
+import time
+import threading
+
+import cv2
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+try:
+    from pynput.keyboard import Controller
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+
+from config import GestureConfig
+
+# Hand connections (pairs of landmark indices to draw lines between)
+HAND_CONNECTIONS = frozenset([
+    (0, 1), (1, 2), (2, 3), (3, 4),        # Thumb
+    (0, 5), (5, 6), (6, 7), (7, 8),        # Index finger
+    (5, 9), (9, 10), (10, 11), (11, 12),   # Middle finger
+    (9, 13), (13, 14), (14, 15), (15, 16), # Ring finger
+    (13, 17), (0, 17), (17, 18), (18, 19), (19, 20),  # Pinky
+])
+
+COLOR_FPS = (0, 255, 0)
+
+
+class GestureProcessor:
+    def __init__(self, cfg: GestureConfig):
+        self.cfg = cfg
+
+        # Thread-safe detection result (replaces spinlock)
+        self._result_lock = threading.Lock()
+        self._detection_result = None
+
+        # Keyboard controller
+        self.keyboard_controller = None
+
+        # Hand control state
+        self.controlling_hand_state = {
+            "is_palm_open": False,
+            "reference_point": None,
+            "last_palm_position": None,
+            "active_keys": set(),
+            "last_seen_time": None,
+            "control_active": False,
+        }
+
+        # MediaPipe landmarker (set by init_landmarker)
+        self.landmarker = None
+
+        # Timestamp tracking for process_frame
+        self._last_timestamp_ms = 0
+
+    @property
+    def key_mapping(self):
+        return {
+            "forward": self.cfg.key_forward,
+            "backward": self.cfg.key_backward,
+            "left": self.cfg.key_left,
+            "right": self.cfg.key_right,
+        }
+
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
+
+    def init_camera(self):
+        """Open camera and configure settings. Returns (cap, width, height)."""
+        cap = cv2.VideoCapture(self.cfg.camera_index)
+        if not cap.isOpened():
+            raise RuntimeError("Could not open camera.")
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.desired_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.desired_height)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+
+        actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = cap.get(cv2.CAP_PROP_FPS)
+
+        print(f"Camera configured:")
+        print(f"  Resolution: {actual_width}x{actual_height}")
+        print(f"  FPS: {actual_fps}")
+
+        return cap, actual_width, actual_height
+
+    def init_keyboard(self):
+        """Initialize pynput keyboard controller."""
+        if PYNPUT_AVAILABLE and self.cfg.enable_actual_keypresses:
+            try:
+                self.keyboard_controller = Controller()
+                print("Keyboard controller initialized (actual key press mode)")
+            except Exception:
+                self.keyboard_controller = None
+                print("Keyboard controller initialization failed - print-only mode")
+        else:
+            self.keyboard_controller = None
+            if not PYNPUT_AVAILABLE:
+                print("Keyboard controller not available - print-only mode")
+            else:
+                print("Keyboard controller disabled - print-only mode")
+
+    def init_landmarker(self):
+        """Create and return MediaPipe HandLandmarker. Also stores it as self.landmarker."""
+        model_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task"
+        )
+
+        options = vision.HandLandmarkerOptions(
+            base_options=python.BaseOptions(model_asset_path=model_path),
+            running_mode=vision.RunningMode.LIVE_STREAM,
+            num_hands=2,
+            min_hand_detection_confidence=self.cfg.min_hand_detection_confidence,
+            min_hand_presence_confidence=self.cfg.min_hand_presence_confidence,
+            min_tracking_confidence=self.cfg.min_tracking_confidence,
+            result_callback=self.result_callback,
+        )
+
+        self.landmarker = vision.HandLandmarker.create_from_options(options)
+        return self.landmarker
+
+    # ------------------------------------------------------------------
+    # MediaPipe callback (runs on MediaPipe's internal thread)
+    # ------------------------------------------------------------------
+
+    def result_callback(self, result, output_image, timestamp_ms):
+        with self._result_lock:
+            self._detection_result = result
+
+    def get_latest_result(self):
+        with self._result_lock:
+            result = self._detection_result
+            self._detection_result = None
+            return result
+
+    # ------------------------------------------------------------------
+    # Gesture detection
+    # ------------------------------------------------------------------
+
+    def is_hand_open_palm(self, hand_landmarks):
+        """Detect open palm by checking finger extension."""
+        wrist = hand_landmarks[0]
+        fingers_extended = 0
+
+        finger_tips = [8, 12, 16, 20]
+        finger_bases = [5, 9, 13, 17]
+
+        for tip_idx, base_idx in zip(finger_tips, finger_bases):
+            tip = hand_landmarks[tip_idx]
+            base = hand_landmarks[base_idx]
+
+            tip_dist = (
+                (tip.x - wrist.x) ** 2 + (tip.y - wrist.y) ** 2 + (tip.z - wrist.z) ** 2
+            ) ** 0.5
+            base_dist = (
+                (base.x - wrist.x) ** 2 + (base.y - wrist.y) ** 2 + (base.z - wrist.z) ** 2
+            ) ** 0.5
+
+            if tip_dist > base_dist * self.cfg.palm_extension_threshold:
+                fingers_extended += 1
+
+        return fingers_extended >= self.cfg.palm_min_fingers
+
+    @staticmethod
+    def calculate_palm_center(hand_landmarks):
+        """Calculate palm center using 5-point average."""
+        wrist = hand_landmarks[0]
+        index_base = hand_landmarks[5]
+        middle_base = hand_landmarks[9]
+        ring_base = hand_landmarks[13]
+        pinky_base = hand_landmarks[17]
+
+        center_x = (wrist.x + index_base.x + middle_base.x + ring_base.x + pinky_base.x) / 5
+        center_y = (wrist.y + index_base.y + middle_base.y + ring_base.y + pinky_base.y) / 5
+
+        return center_x, center_y
+
+    def find_closest_left_hand(self, detection_result):
+        """Find closest left hand to camera based on Z-depth."""
+        if not detection_result or not detection_result.hand_landmarks:
+            return None, None
+
+        closest_hand = None
+        closest_index = None
+        min_z_depth = float("inf")
+
+        for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
+            handedness = detection_result.handedness[idx][0]
+
+            # MediaPipe sees "Right" when user shows their left hand (mirrored)
+            if handedness.category_name == "Right":
+                wrist = hand_landmarks[0]
+                index_base = hand_landmarks[5]
+                middle_base = hand_landmarks[9]
+                ring_base = hand_landmarks[13]
+                pinky_base = hand_landmarks[17]
+
+                avg_z = (wrist.z + index_base.z + middle_base.z + ring_base.z + pinky_base.z) / 5
+
+                if avg_z < min_z_depth:
+                    min_z_depth = avg_z
+                    closest_hand = hand_landmarks
+                    closest_index = idx
+
+        return closest_hand, closest_index
+
+    def is_same_hand(self, hand_landmarks, last_position):
+        """Check if hand matches last tracked position using proximity."""
+        if last_position is None or hand_landmarks is None:
+            return False
+
+        palm_center_x, palm_center_y = self.calculate_palm_center(hand_landmarks)
+
+        wrist = hand_landmarks[0]
+        index_base = hand_landmarks[5]
+        middle_base = hand_landmarks[9]
+        ring_base = hand_landmarks[13]
+        pinky_base = hand_landmarks[17]
+        palm_center_z = (wrist.z + index_base.z + middle_base.z + ring_base.z + pinky_base.z) / 5
+
+        last_x, last_y, last_z = last_position
+        distance = (
+            (palm_center_x - last_x) ** 2
+            + (palm_center_y - last_y) ** 2
+            + (palm_center_z - last_z) ** 2
+        ) ** 0.5
+
+        return distance < self.cfg.hand_proximity_threshold
+
+    # ------------------------------------------------------------------
+    # Keyboard control
+    # ------------------------------------------------------------------
+
+    def update_keyboard_controls(self, hand_landmarks):
+        """Update WASD keys based on hand position relative to reference point."""
+        if (
+            not self.controlling_hand_state["control_active"]
+            or not self.controlling_hand_state["reference_point"]
+        ):
+            return
+
+        palm_center_x, palm_center_y = self.calculate_palm_center(hand_landmarks)
+        ref_x, ref_y = self.controlling_hand_state["reference_point"]
+
+        delta_x = palm_center_x - ref_x
+        delta_y = palm_center_y - ref_y
+
+        target_keys = set()
+        km = self.key_mapping
+        key_right = km["right"]
+        key_left = km["left"]
+        key_forward = km["forward"]
+        key_backward = km["backward"]
+
+        activate = self.cfg.movement_threshold_activate
+        release = self.cfg.movement_threshold_release
+        active = self.controlling_hand_state["active_keys"]
+
+        # X-axis
+        if delta_x < -activate:
+            target_keys.add(key_left)
+        elif delta_x > activate:
+            target_keys.add(key_right)
+        else:
+            if key_left in active and delta_x > -release:
+                pass
+            elif key_left in active:
+                target_keys.add(key_left)
+            if key_right in active and delta_x < release:
+                pass
+            elif key_right in active:
+                target_keys.add(key_right)
+
+        # Y-axis
+        if delta_y < -activate:
+            target_keys.add(key_forward)
+        elif delta_y > activate:
+            target_keys.add(key_backward)
+        else:
+            if key_forward in active and delta_y > -release:
+                pass
+            elif key_forward in active:
+                target_keys.add(key_forward)
+            if key_backward in active and delta_y < release:
+                pass
+            elif key_backward in active:
+                target_keys.add(key_backward)
+
+        # Press new keys
+        for key in target_keys - active:
+            if self.cfg.enable_debug_output:
+                print(f"KEY PRESS: {key.upper()}")
+            if self.keyboard_controller is not None:
+                try:
+                    self.keyboard_controller.press(key)
+                except Exception:
+                    pass
+
+        # Release old keys
+        for key in active - target_keys:
+            if self.cfg.enable_debug_output:
+                print(f"KEY RELEASE: {key.upper()}")
+            if self.keyboard_controller is not None:
+                try:
+                    self.keyboard_controller.release(key)
+                except Exception:
+                    pass
+
+        self.controlling_hand_state["active_keys"] = target_keys
+
+    def process_left_hand_control(self, detection_result):
+        """Process left hand for keyboard control with multi-person support."""
+        current_time = time.time()
+
+        left_hand_landmarks, _ = self.find_closest_left_hand(detection_result)
+
+        if left_hand_landmarks is not None:
+            palm_center_x, palm_center_y = self.calculate_palm_center(left_hand_landmarks)
+            wrist = left_hand_landmarks[0]
+            index_base = left_hand_landmarks[5]
+            middle_base = left_hand_landmarks[9]
+            ring_base = left_hand_landmarks[13]
+            pinky_base = left_hand_landmarks[17]
+            palm_center_z = (wrist.z + index_base.z + middle_base.z + ring_base.z + pinky_base.z) / 5
+            current_palm_position = (palm_center_x, palm_center_y, palm_center_z)
+
+            if self.controlling_hand_state["control_active"]:
+                if not self.is_same_hand(left_hand_landmarks, self.controlling_hand_state["last_palm_position"]):
+                    if self.controlling_hand_state["last_seen_time"]:
+                        time_since_seen = current_time - self.controlling_hand_state["last_seen_time"]
+                        if time_since_seen <= self.cfg.hand_loss_grace_period:
+                            return
+
+            self.controlling_hand_state["last_seen_time"] = current_time
+            self.controlling_hand_state["last_palm_position"] = current_palm_position
+
+            is_palm_open = self.is_hand_open_palm(left_hand_landmarks)
+
+            if is_palm_open and self.controlling_hand_state["reference_point"] is None:
+                self.controlling_hand_state["reference_point"] = (palm_center_x, palm_center_y)
+                print(f"Reference point set - palm center locked at ({palm_center_x:.3f}, {palm_center_y:.3f})")
+
+            if is_palm_open and not self.controlling_hand_state["is_palm_open"]:
+                self.controlling_hand_state["control_active"] = True
+                self.controlling_hand_state["is_palm_open"] = True
+                print("Control activated - open palm detected")
+
+            if is_palm_open and self.controlling_hand_state["is_palm_open"]:
+                self.update_keyboard_controls(left_hand_landmarks)
+
+            elif not is_palm_open and self.controlling_hand_state["is_palm_open"]:
+                self.controlling_hand_state["is_palm_open"] = False
+                self.release_all_keys()
+                self.controlling_hand_state["reference_point"] = None
+
+        else:
+            if self.controlling_hand_state["control_active"]:
+                if self.controlling_hand_state["last_seen_time"]:
+                    time_since_seen = current_time - self.controlling_hand_state["last_seen_time"]
+                    if time_since_seen > self.cfg.hand_loss_grace_period:
+                        print("Hand lost - releasing controls")
+                        self.release_all_keys()
+                        self.controlling_hand_state["control_active"] = False
+                        self.controlling_hand_state["is_palm_open"] = False
+
+    def release_all_keys(self):
+        """Release all currently pressed keys."""
+        for key in self.controlling_hand_state["active_keys"]:
+            if self.cfg.enable_debug_output:
+                print(f"KEY RELEASE: {key.upper()}")
+            if self.keyboard_controller is not None:
+                try:
+                    self.keyboard_controller.release(key)
+                except Exception:
+                    pass
+        self.controlling_hand_state["active_keys"] = set()
+
+    def reset_control(self):
+        """Release keys and reset all control state."""
+        self.release_all_keys()
+        self.controlling_hand_state["reference_point"] = None
+        self.controlling_hand_state["last_palm_position"] = None
+        self.controlling_hand_state["control_active"] = False
+        self.controlling_hand_state["is_palm_open"] = False
+        print("\nReference point reset - show open palm with left hand to set new reference")
+
+    # ------------------------------------------------------------------
+    # Drawing
+    # ------------------------------------------------------------------
+
+    def draw_landmarks_on_image(self, image, detection_result):
+        """Draw hand landmarks and connections on the image."""
+        if not detection_result or not detection_result.hand_landmarks:
+            return image
+
+        height, width, _ = image.shape
+        color_left = tuple(self.cfg.color_left_hand)
+        color_right = tuple(self.cfg.color_right_hand)
+
+        for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
+            handedness = detection_result.handedness[idx][0]
+            hand_label = "Left" if handedness.category_name == "Right" else "Right"
+            color = color_left if hand_label == "Left" else color_right
+
+            # Draw connections
+            for start_idx, end_idx in HAND_CONNECTIONS:
+                s = hand_landmarks[start_idx]
+                e = hand_landmarks[end_idx]
+                cv2.line(
+                    image,
+                    (int(s.x * width), int(s.y * height)),
+                    (int(e.x * width), int(e.y * height)),
+                    color, 2,
+                )
+
+            # Draw landmarks
+            for landmark in hand_landmarks:
+                x = int(landmark.x * width)
+                y = int(landmark.y * height)
+                cv2.circle(image, (x, y), 5, color, -1)
+                cv2.circle(image, (x, y), 7, (255, 255, 255), 1)
+
+            # Draw palm center
+            pcx, pcy = self.calculate_palm_center(hand_landmarks)
+            ppx, ppy = int(pcx * width), int(pcy * height)
+            cv2.circle(image, (ppx, ppy), 8, (255, 0, 255), -1)
+            cv2.circle(image, (ppx, ppy), 10, (255, 255, 255), 2)
+
+            # Draw hand label
+            wrist = hand_landmarks[0]
+            wx, wy = int(wrist.x * width), int(wrist.y * height)
+            cv2.putText(image, f"{hand_label} Hand", (wx - 50, wy - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+            # Draw control status for left hand
+            if hand_label == "Left" and self.controlling_hand_state["control_active"]:
+                is_ctrl = self.is_same_hand(hand_landmarks, self.controlling_hand_state["last_palm_position"])
+
+                if is_ctrl or self.controlling_hand_state["last_palm_position"] is None:
+                    status_text = (
+                        "CONTROLLING - PALM"
+                        if self.controlling_hand_state["is_palm_open"]
+                        else "CONTROLLING"
+                    )
+                    status_color = (0, 255, 0) if self.controlling_hand_state["is_palm_open"] else (0, 200, 200)
+                    cv2.putText(image, status_text, (wx - 50, wy + 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2, cv2.LINE_AA)
+
+                    # Draw reference point
+                    if self.controlling_hand_state["reference_point"] and self.controlling_hand_state["control_active"]:
+                        ref_x, ref_y = self.controlling_hand_state["reference_point"]
+                        rpx, rpy = int(ref_x * width), int(ref_y * height)
+                        cv2.circle(image, (rpx, rpy), 10, (0, 255, 255), 2)
+                        cv2.putText(image, "REF", (rpx + 15, rpy),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+
+                        self.draw_direction_arrow(
+                            image,
+                            self.controlling_hand_state["reference_point"],
+                            self.controlling_hand_state["active_keys"],
+                        )
+
+        return image
+
+    @staticmethod
+    def draw_fps(image, fps):
+        """Draw FPS counter on the image."""
+        cv2.putText(image, f"FPS: {fps:.1f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, COLOR_FPS, 2, cv2.LINE_AA)
+
+    def draw_wasd_overlay(self, image):
+        """Draw WASD keyboard overlay showing which keys are currently pressed."""
+        if not self.cfg.wasd_overlay_enabled:
+            return
+
+        height, width, _ = image.shape
+        active_keys = self.controlling_hand_state["active_keys"]
+
+        km = self.key_mapping
+        key_w, key_a = km["forward"], km["left"]
+        key_s, key_d = km["backward"], km["right"]
+
+        ks = self.cfg.wasd_key_size
+        sp = self.cfg.wasd_key_spacing
+        base_x = self.cfg.wasd_overlay_x
+        base_y = height - self.cfg.wasd_overlay_y_offset
+
+        color_active = tuple(self.cfg.wasd_key_color_active)
+        color_inactive = tuple(self.cfg.wasd_key_color_inactive)
+        text_active = tuple(self.cfg.wasd_text_color_active)
+        text_inactive = tuple(self.cfg.wasd_text_color_inactive)
+
+        keys = {
+            key_w: {"pos": (base_x + ks + sp, base_y - ks - sp), "label": "W"},
+            key_a: {"pos": (base_x, base_y), "label": "A"},
+            key_s: {"pos": (base_x + ks + sp, base_y), "label": "S"},
+            key_d: {"pos": (base_x + 2 * (ks + sp), base_y), "label": "D"},
+        }
+
+        for key, info in keys.items():
+            x, y = info["pos"]
+            label = info["label"]
+            is_active = key in active_keys
+
+            box_color = color_active if is_active else color_inactive
+            text_color = text_active if is_active else text_inactive
+
+            cv2.rectangle(image, (x, y), (x + ks, y + ks), box_color, -1)
+            cv2.rectangle(image, (x, y), (x + ks, y + ks), (255, 255, 255), 2)
+
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+            tx = x + (ks - text_size[0]) // 2
+            ty = y + (ks + text_size[1]) // 2
+            cv2.putText(image, label, (tx, ty),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2, cv2.LINE_AA)
+
+    def draw_direction_arrow(self, image, reference_point, active_keys):
+        """Draw a directional arrow near the reference point."""
+        if not active_keys or not reference_point:
+            return
+
+        ARROW_COLOR = (0, 255, 255)
+        ARROW_LENGTH = 120
+        ARROW_THICKNESS = 3
+        ARROW_TIP_LENGTH = 0.3
+
+        height, width, _ = image.shape
+        ref_x = int(reference_point[0] * width)
+        ref_y = int(reference_point[1] * height)
+
+        km = self.key_mapping
+        direction_x = 0
+        direction_y = 0
+
+        if km["right"] in active_keys:
+            direction_x += 1
+        if km["left"] in active_keys:
+            direction_x -= 1
+        if km["forward"] in active_keys:
+            direction_y -= 1
+        if km["backward"] in active_keys:
+            direction_y += 1
+
+        if direction_x == 0 and direction_y == 0:
+            return
+
+        magnitude = (direction_x ** 2 + direction_y ** 2) ** 0.5
+        norm_x = direction_x / magnitude
+        norm_y = direction_y / magnitude
+
+        end_x = int(ref_x + norm_x * ARROW_LENGTH)
+        end_y = int(ref_y + norm_y * ARROW_LENGTH)
+
+        cv2.arrowedLine(image, (ref_x, ref_y), (end_x, end_y),
+                        ARROW_COLOR, ARROW_THICKNESS, tipLength=ARROW_TIP_LENGTH)
+
+    # ------------------------------------------------------------------
+    # Frame pipeline
+    # ------------------------------------------------------------------
+
+    def process_frame(self, frame):
+        """Full processing pipeline for a single frame.
+
+        Flips, sends to MediaPipe, draws landmarks, processes controls,
+        draws WASD overlay. Returns the annotated BGR frame.
+        """
+        frame = cv2.flip(frame, 1)
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+        timestamp_ms = int(time.time() * 1000)
+        # MediaPipe requires strictly increasing timestamps
+        if timestamp_ms <= self._last_timestamp_ms:
+            timestamp_ms = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = timestamp_ms
+
+        self.landmarker.detect_async(mp_image, timestamp_ms)
+
+        result = self.get_latest_result()
+        if result:
+            frame = self.draw_landmarks_on_image(frame, result)
+            self.process_left_hand_control(result)
+
+        self.draw_wasd_overlay(frame)
+
+        return frame
+
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
+    def cleanup(self):
+        """Release keys and close landmarker."""
+        self.release_all_keys()
+        if self.landmarker:
+            self.landmarker.close()
+            self.landmarker = None

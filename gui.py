@@ -1,17 +1,15 @@
 import sys
-import os
-import subprocess
-import tempfile
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSpinBox, QDoubleSpinBox, QSlider, QCheckBox, QPushButton,
     QLabel, QColorDialog, QGroupBox,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QKeyEvent
 
 from config import GestureConfig
+from pip_overlay import CameraWorker, PipOverlay
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +118,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Gesture Recognition - Settings")
         self.setFixedWidth(520)
-        self.process = None
-        self.poll_timer = QTimer()
-        self.poll_timer.timeout.connect(self._check_process)
+        self.worker = None
+        self.pip_overlay = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -404,42 +401,52 @@ class MainWindow(QMainWindow):
         self._populate(GestureConfig())
 
     def _toggle_start_stop(self):
-        if self.process is not None:
+        if self.worker is not None and self.worker.isRunning():
             self._stop()
         else:
             self._start()
 
     def _start(self):
         cfg = self._collect()
-        config_path = os.path.join(tempfile.gettempdir(), "gesture_config.json")
-        cfg.to_json(config_path)
 
-        main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
-        self.process = subprocess.Popen(
-            [sys.executable, main_py, "--config", config_path],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-        )
+        self.pip_overlay = PipOverlay()
+
+        self.worker = CameraWorker(cfg)
+        self.worker.frame_ready.connect(self.pip_overlay.update_frame)
+        self.worker.error.connect(self._on_worker_error)
+        self.worker.stopped.connect(self._on_worker_stopped)
+
+        self.worker.start()
+        self.pip_overlay.show()
 
         self.btn_start.setText("Stop")
         self.status_label.setText("Running...")
-        self.poll_timer.start(500)
 
     def _stop(self):
-        if self.process:
-            self.process.terminate()
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait(5000)
+        if self.pip_overlay:
+            self.pip_overlay.hide()
+            self.pip_overlay = None
+        self.worker = None
+        self.btn_start.setText("Start")
+        self.status_label.setText("Stopped")
 
-    def _check_process(self):
-        if self.process and self.process.poll() is not None:
-            self.poll_timer.stop()
-            code = self.process.returncode
-            self.process = None
-            self.btn_start.setText("Start")
-            self.status_label.setText(f"Stopped (exit code {code})")
+    def _on_worker_error(self, message: str):
+        self.status_label.setText(f"Error: {message}")
+        self._stop()
+
+    def _on_worker_stopped(self):
+        if self.pip_overlay:
+            self.pip_overlay.hide()
+            self.pip_overlay = None
+        self.worker = None
+        self.btn_start.setText("Start")
+        self.status_label.setText("Stopped")
 
     def closeEvent(self, event):
-        if self.process:
-            self.process.terminate()
-            self.process.wait(timeout=5)
+        self._stop()
         event.accept()
 
 
