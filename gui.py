@@ -116,7 +116,7 @@ def _make_confidence_row(label_text: str, value: float):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gesture Recognition - Settings")
+        self.setWindowTitle("Settings")
         self.setFixedWidth(520)
         self.worker = None
         self.pip_overlay = None
