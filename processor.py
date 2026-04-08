@@ -139,7 +139,7 @@ class GestureProcessor:
         actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         actual_fps    = cap.get(cv2.CAP_PROP_FPS)
 
-        print(f"Camera configured:")
+        print("Camera configured:")
         print(f"  Resolution: {actual_width}x{actual_height}")
         print(f"  FPS: {actual_fps}")
 
@@ -847,10 +847,14 @@ class GestureProcessor:
         direction_x = 0
         direction_y = 0
 
-        if km["right"]    in active_keys: direction_x += 1
-        if km["left"]     in active_keys: direction_x -= 1
-        if km["forward"]  in active_keys: direction_y -= 1
-        if km["backward"] in active_keys: direction_y += 1
+        if km["right"]    in active_keys: 
+            direction_x += 1
+        if km["left"]     in active_keys: 
+            direction_x -= 1
+        if km["forward"]  in active_keys: 
+            direction_y -= 1
+        if km["backward"] in active_keys: 
+            direction_y += 1
 
         if direction_x == 0 and direction_y == 0:
             return
