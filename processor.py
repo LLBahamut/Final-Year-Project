@@ -581,13 +581,11 @@ class GestureProcessor:
 
         else:
             if self.controlling_hand_state["control_active"]:
-                if self.controlling_hand_state["last_seen_time"]:
-                    time_since_seen = current_time - self.controlling_hand_state["last_seen_time"]
-                    if time_since_seen > self.cfg.hand_loss_grace_period:
-                        print("Hand lost - releasing controls")
-                        self.release_all_keys()
-                        self.controlling_hand_state["control_active"] = False
-                        self.controlling_hand_state["is_palm_open"]   = False
+                print("Hand lost - releasing controls")
+                self.release_all_keys()
+                self.controlling_hand_state["control_active"] = False
+                self.controlling_hand_state["is_palm_open"]   = False
+                self.controlling_hand_state["reference_point"] = None
 
     def release_all_keys(self):
         """Release all currently pressed keys."""
@@ -925,13 +923,9 @@ class GestureProcessor:
                 if self.cfg.enable_debug_output:
                     print(f"Frame processing error: {e}")
         else:
-            # No fresh result — still tick gesture debounce so held keys
-            # get released when the hand leaves the camera frame.
-            try:
-                self.process_right_hand_gestures(None)
-            except Exception as e:
-                if self.cfg.enable_debug_output:
-                    print(f"Frame processing error: {e}")
+            # No fresh result — release all held keys immediately
+            self.release_all_keys()
+            self.release_right_hand_gesture_key()
 
         # Always draw from cache — never skips a frame
         if self._last_drawn_result is not None:
