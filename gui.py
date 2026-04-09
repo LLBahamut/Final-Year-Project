@@ -17,36 +17,52 @@ from pip_overlay import CameraWorker, PipOverlay
 # ---------------------------------------------------------------------------
 
 _SPECIAL_KEY_NAMES = {
-    # Common keys
     Qt.Key.Key_Space: "space",
     Qt.Key.Key_Return: "enter",
     Qt.Key.Key_Enter: "enter",
     Qt.Key.Key_Tab: "tab",
     Qt.Key.Key_Backspace: "backspace",
     Qt.Key.Key_Escape: "esc",
-    # Modifiers
     Qt.Key.Key_Shift: "shift",
     Qt.Key.Key_Control: "ctrl",
     Qt.Key.Key_Alt: "alt",
     Qt.Key.Key_CapsLock: "caps_lock",
     Qt.Key.Key_Meta: "cmd",
-    # Function keys
     Qt.Key.Key_F1: "f1", Qt.Key.Key_F2: "f2", Qt.Key.Key_F3: "f3",
     Qt.Key.Key_F4: "f4", Qt.Key.Key_F5: "f5", Qt.Key.Key_F6: "f6",
     Qt.Key.Key_F7: "f7", Qt.Key.Key_F8: "f8", Qt.Key.Key_F9: "f9",
     Qt.Key.Key_F10: "f10", Qt.Key.Key_F11: "f11", Qt.Key.Key_F12: "f12",
-    # Arrow keys
     Qt.Key.Key_Up: "up", Qt.Key.Key_Down: "down",
     Qt.Key.Key_Left: "left", Qt.Key.Key_Right: "right",
-    # Navigation
     Qt.Key.Key_Home: "home", Qt.Key.Key_End: "end",
     Qt.Key.Key_PageUp: "page_up", Qt.Key.Key_PageDown: "page_down",
     Qt.Key.Key_Insert: "insert", Qt.Key.Key_Delete: "delete",
-    # Lock / special
     Qt.Key.Key_NumLock: "num_lock", Qt.Key.Key_ScrollLock: "scroll_lock",
     Qt.Key.Key_Pause: "pause", Qt.Key.Key_Print: "print_screen",
     Qt.Key.Key_Menu: "menu",
 }
+
+
+def _stacked_label(name: str, hint: str = "") -> QWidget:
+    """Label widget: name in normal font, hint below in smaller muted text."""
+    container = QWidget()
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(0, 2, 0, 2)
+    layout.setSpacing(1)
+
+    name_lbl = QLabel(name)
+    layout.addWidget(name_lbl)
+
+    if hint:
+        hint_lbl = QLabel(hint)
+        hint_lbl.setWordWrap(True)
+        f = hint_lbl.font()
+        f.setPointSize(max(7, f.pointSize() - 2))
+        hint_lbl.setFont(f)
+        hint_lbl.setStyleSheet("color: #888888;")
+        layout.addWidget(hint_lbl)
+
+    return container
 
 
 class KeyCaptureButton(QPushButton):
@@ -62,7 +78,6 @@ class KeyCaptureButton(QPushButton):
 
     @staticmethod
     def _display_text(key: str) -> str:
-        """Format key name for display."""
         return key.upper().replace("_", " ")
 
     def _start_listening(self):
@@ -150,14 +165,14 @@ class ColorPickerButton(QPushButton):
 
 
 # ---------------------------------------------------------------------------
-# Helper: labelled slider for float values 0.0 - 1.0
+# Helper: confidence slider row (label stacked above slider)
 # ---------------------------------------------------------------------------
 
-def _make_confidence_row(label_text: str, value: float):
+def _make_confidence_row(name: str, hint: str, value: float):
     """Return (layout, slider, value_label) for a 0-100 int slider mapped to 0.0-1.0."""
     row = QHBoxLayout()
-    lbl = QLabel(label_text)
-    lbl.setFixedWidth(200)
+    lbl = _stacked_label(name, hint)
+    lbl.setFixedWidth(180)
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setRange(0, 100)
     slider.setValue(int(value * 100))
@@ -198,7 +213,6 @@ class MainWindow(QMainWindow):
         bottom = QHBoxLayout()
         self.btn_defaults = QPushButton("Restore Defaults")
         self.btn_defaults.clicked.connect(self._restore_defaults)
-        # FIX: Save Settings button persists widget state to config.json
         self.btn_save = QPushButton("Save Settings")
         self.btn_save.clicked.connect(self._save_settings)
         self.status_label = QLabel("Ready")
@@ -214,7 +228,6 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.btn_start)
         root_layout.addLayout(bottom)
 
-        # FIX: Load saved config.json on startup; fall back to defaults if absent
         try:
             self._populate(GestureConfig.from_json("config.json"))
         except Exception:
@@ -227,26 +240,50 @@ class MainWindow(QMainWindow):
     def _build_camera_tab(self):
         tab = QWidget()
         layout = QFormLayout(tab)
+        layout.setVerticalSpacing(8)
 
         self.spin_camera_index = QSpinBox()
         self.spin_camera_index.setRange(0, 10)
-        layout.addRow("Camera Index:", self.spin_camera_index)
+        layout.addRow(
+            _stacked_label("Camera Index", "0 = built-in webcam\n1+ = external camera"),
+            self.spin_camera_index,
+        )
 
         self.spin_width = QSpinBox()
         self.spin_width.setRange(320, 3840)
         self.spin_width.setSingleStep(160)
-        layout.addRow("Resolution Width:", self.spin_width)
+        layout.addRow(
+            _stacked_label("Resolution Width", "higher = sharper image, uses more CPU"),
+            self.spin_width,
+        )
 
         self.spin_height = QSpinBox()
         self.spin_height.setRange(240, 2160)
         self.spin_height.setSingleStep(120)
-        layout.addRow("Resolution Height:", self.spin_height)
+        layout.addRow(
+            _stacked_label("Resolution Height", "higher = sharper image, uses more CPU"),
+            self.spin_height,
+        )
 
-        row1, self.slider_detection, _ = _make_confidence_row("Hand Detection Confidence:", 0.7)
+        row1, self.slider_detection, _ = _make_confidence_row(
+            "Detection Confidence",
+            "lower = finds hands more easily\nhigher = fewer false positives",
+            0.7,
+        )
         layout.addRow(row1)
-        row2, self.slider_presence, _ = _make_confidence_row("Hand Presence Confidence:", 0.5)
+
+        row2, self.slider_presence, _ = _make_confidence_row(
+            "Presence Confidence",
+            "lower = hand stays tracked longer\nhigher = drops out faster",
+            0.5,
+        )
         layout.addRow(row2)
-        row3, self.slider_tracking, _ = _make_confidence_row("Tracking Confidence:", 0.5)
+
+        row3, self.slider_tracking, _ = _make_confidence_row(
+            "Tracking Confidence",
+            "lower = re-detects hand more often\nhigher = trusts existing track",
+            0.5,
+        )
         layout.addRow(row3)
 
         self.tabs.addTab(tab, "Camera && Detection")
@@ -254,53 +291,78 @@ class MainWindow(QMainWindow):
     def _build_gesture_tab(self):
         tab = QWidget()
         layout = QFormLayout(tab)
+        layout.setVerticalSpacing(8)
 
         self.spin_palm_ext = QDoubleSpinBox()
         self.spin_palm_ext.setRange(0.5, 2.0)
         self.spin_palm_ext.setSingleStep(0.05)
         self.spin_palm_ext.setDecimals(2)
-        layout.addRow("Palm Extension Threshold:", self.spin_palm_ext)
+        layout.addRow(
+            _stacked_label("Palm Extension", "lower = any open hand triggers\nhigher = needs wide finger spread"),
+            self.spin_palm_ext,
+        )
 
         self.spin_palm_fingers = QSpinBox()
         self.spin_palm_fingers.setRange(1, 4)
-        layout.addRow("Palm Min Fingers:", self.spin_palm_fingers)
+        layout.addRow(
+            _stacked_label("Min Fingers for Palm", "lower = fewer fingers needed to open palm\nhigher = stricter"),
+            self.spin_palm_fingers,
+        )
 
         self.spin_move_activate = QDoubleSpinBox()
         self.spin_move_activate.setRange(0.01, 0.50)
         self.spin_move_activate.setSingleStep(0.01)
         self.spin_move_activate.setDecimals(2)
-        layout.addRow("Movement Activate Threshold:", self.spin_move_activate)
+        layout.addRow(
+            _stacked_label("Move Activate", "lower = keys fire with small movement\nhigher = needs bigger move"),
+            self.spin_move_activate,
+        )
 
         self.spin_move_release = QDoubleSpinBox()
         self.spin_move_release.setRange(0.01, 0.50)
         self.spin_move_release.setSingleStep(0.01)
         self.spin_move_release.setDecimals(2)
-        layout.addRow("Movement Release Threshold:", self.spin_move_release)
+        layout.addRow(
+            _stacked_label("Move Release", "lower = keys drop as soon as hand returns\nhigher = keys hold longer"),
+            self.spin_move_release,
+        )
 
         self.spin_grace = QDoubleSpinBox()
         self.spin_grace.setRange(0.0, 10.0)
         self.spin_grace.setSingleStep(0.5)
         self.spin_grace.setDecimals(1)
         self.spin_grace.setSuffix(" sec")
-        layout.addRow("Hand Loss Grace Period:", self.spin_grace)
+        layout.addRow(
+            _stacked_label("Hand Loss Grace Period", "lower = controls drop immediately\nhigher = tolerates brief occlusion"),
+            self.spin_grace,
+        )
 
         self.spin_proximity = QDoubleSpinBox()
         self.spin_proximity.setRange(0.01, 1.0)
         self.spin_proximity.setSingleStep(0.01)
         self.spin_proximity.setDecimals(2)
-        layout.addRow("Hand Proximity Threshold:", self.spin_proximity)
+        layout.addRow(
+            _stacked_label("Hand Proximity", "lower = strict same-hand matching\nhigher = more tolerant of movement"),
+            self.spin_proximity,
+        )
 
         self.spin_pinch_dist = QDoubleSpinBox()
         self.spin_pinch_dist.setRange(0.01, 0.20)
         self.spin_pinch_dist.setSingleStep(0.005)
         self.spin_pinch_dist.setDecimals(3)
-        layout.addRow("Pinch Distance Threshold:", self.spin_pinch_dist)
+        layout.addRow(
+            _stacked_label("Pinch Distance", "lower = fingers must nearly touch\nhigher = loose pinch is enough"),
+            self.spin_pinch_dist,
+        )
 
         self.spin_curl_ratio = QDoubleSpinBox()
         self.spin_curl_ratio.setRange(0.5, 1.0)
         self.spin_curl_ratio.setSingleStep(0.05)
         self.spin_curl_ratio.setDecimals(2)
-        layout.addRow("Finger Curl Max Ratio:", self.spin_curl_ratio)
+        layout.addRow(
+            _stacked_label("Finger Curl Ratio", "lower = finger must curl fully\nhigher = partial curl counts"),
+            self.spin_curl_ratio,
+        )
 
         self.tabs.addTab(tab, "Gesture Thresholds")
 
@@ -351,12 +413,16 @@ class MainWindow(QMainWindow):
     def _build_display_tab(self):
         tab = QWidget()
         layout = QFormLayout(tab)
+        layout.setVerticalSpacing(8)
 
         self.spin_pip_scale = QDoubleSpinBox()
         self.spin_pip_scale.setRange(0.1, 1.0)
         self.spin_pip_scale.setSingleStep(0.05)
         self.spin_pip_scale.setDecimals(2)
-        layout.addRow("PiP Scale:", self.spin_pip_scale)
+        layout.addRow(
+            _stacked_label("PiP Window Size", "lower = smaller camera overlay\nhigher = larger"),
+            self.spin_pip_scale,
+        )
 
         self.chk_wasd_overlay = QCheckBox("WASD Overlay Enabled")
         layout.addRow(self.chk_wasd_overlay)
@@ -364,28 +430,41 @@ class MainWindow(QMainWindow):
         self.spin_key_size = QSpinBox()
         self.spin_key_size.setRange(20, 100)
         self.spin_key_size.setSingleStep(5)
-        layout.addRow("WASD Key Size:", self.spin_key_size)
+        layout.addRow(
+            _stacked_label("Key Size (px)", "lower = smaller key boxes\nhigher = bigger key boxes"),
+            self.spin_key_size,
+        )
 
         self.spin_key_spacing = QSpinBox()
         self.spin_key_spacing.setRange(0, 30)
         self.spin_key_spacing.setSingleStep(2)
-        layout.addRow("WASD Key Spacing:", self.spin_key_spacing)
+        layout.addRow(
+            _stacked_label("Key Spacing (px)", "lower = keys closer together\nhigher = more spread apart"),
+            self.spin_key_spacing,
+        )
 
         self.spin_overlay_x = QSpinBox()
         self.spin_overlay_x.setRange(0, 500)
         self.spin_overlay_x.setSingleStep(10)
-        layout.addRow("WASD Overlay X:", self.spin_overlay_x)
+        layout.addRow(
+            _stacked_label("Overlay X Position (px)", "horizontal offset from the left edge of the frame"),
+            self.spin_overlay_x,
+        )
 
         self.spin_overlay_y = QSpinBox()
         self.spin_overlay_y.setRange(50, 500)
         self.spin_overlay_y.setSingleStep(10)
-        layout.addRow("WASD Overlay Y Offset:", self.spin_overlay_y)
+        layout.addRow(
+            _stacked_label("Overlay Y Offset (px)", "vertical offset upward from the bottom edge of the frame"),
+            self.spin_overlay_y,
+        )
 
         self.tabs.addTab(tab, "Display && Overlay")
 
     def _build_colors_tab(self):
         tab = QWidget()
         layout = QFormLayout(tab)
+        layout.setVerticalSpacing(8)
 
         self.color_left_hand = ColorPickerButton([255, 0, 0])
         self.color_right_hand = ColorPickerButton([0, 0, 255])
