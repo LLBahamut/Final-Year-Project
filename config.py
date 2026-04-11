@@ -61,11 +61,12 @@ class GestureConfig:
     preprocess_gamma_enabled: bool = False
     preprocess_gamma_value: float = 1.0  # 1.0 = no change; <1 brightens, >1 darkens
 
-    preprocess_auto_enabled: bool = False
+    preprocess_auto_enabled: bool = True
     preprocess_auto_target: int = 120       # target mean luminance (0-255)
     preprocess_auto_low: int = 80           # below this, brighten path
     preprocess_auto_high: int = 180         # above this, darken path
     preprocess_auto_smoothing: float = 0.2  # EMA factor for measured brightness
+    preprocess_auto_denoise: bool = True    # bilateral filter when auto-dark triggers
 
     # PiP
     pip_scale: float = 0.4

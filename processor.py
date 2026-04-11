@@ -190,21 +190,27 @@ class GestureProcessor:
             else:
                 print("Keyboard controller disabled - print-only mode")
 
-    def _press_action(self, resolved_key):
-        """Press a key or mouse button via the appropriate controller."""
-        if MouseButton and isinstance(resolved_key, MouseButton):
+    def _press_action(self, key):
+        """Press a key or mouse button. Accepts raw config strings
+        (auto-resolved via SPECIAL_KEY_MAP) or pre-resolved pynput
+        Key / MouseButton values."""
+        resolved = resolve_key(key) if isinstance(key, str) else key
+        if MouseButton and isinstance(resolved, MouseButton):
             if self.mouse_controller is not None:
-                self.mouse_controller.press(resolved_key)
+                self.mouse_controller.press(resolved)
         elif self.keyboard_controller is not None:
-            self.keyboard_controller.press(resolved_key)
+            self.keyboard_controller.press(resolved)
 
-    def _release_action(self, resolved_key):
-        """Release a key or mouse button via the appropriate controller."""
-        if MouseButton and isinstance(resolved_key, MouseButton):
+    def _release_action(self, key):
+        """Release a key or mouse button. Accepts raw config strings
+        (auto-resolved via SPECIAL_KEY_MAP) or pre-resolved pynput
+        Key / MouseButton values."""
+        resolved = resolve_key(key) if isinstance(key, str) else key
+        if MouseButton and isinstance(resolved, MouseButton):
             if self.mouse_controller is not None:
-                self.mouse_controller.release(resolved_key)
+                self.mouse_controller.release(resolved)
         elif self.keyboard_controller is not None:
-            self.keyboard_controller.release(resolved_key)
+            self.keyboard_controller.release(resolved)
 
     def init_landmarker(self):
         """Create and return MediaPipe HandLandmarker. Also stores it as self.landmarker."""
@@ -951,6 +957,7 @@ class GestureProcessor:
         clahe_on = cfg.preprocess_clahe_enabled
         gamma_on = cfg.preprocess_gamma_enabled
         gamma_val = cfg.preprocess_gamma_value
+        denoise_on = False  # enabled below only when auto-dark path triggers
 
         if not (clahe_on or gamma_on or cfg.preprocess_auto_enabled):
             return frame  # fast path: nothing to do
@@ -967,6 +974,7 @@ class GestureProcessor:
             if mean_v < cfg.preprocess_auto_low:
                 clahe_on = True
                 gamma_on = True
+                denoise_on = cfg.preprocess_auto_denoise
                 mv = max(1.0, mean_v)
                 tv = max(1.0, float(cfg.preprocess_auto_target))
                 gamma_val = math.log(mv / 255.0) / math.log(tv / 255.0)
@@ -992,6 +1000,12 @@ class GestureProcessor:
 
         if gamma_on and abs(gamma_val - 1.0) > 1e-3:
             frame = cv2.LUT(frame, self._get_gamma_lut(gamma_val))
+
+        # Bilateral denoise only on the auto-dark path — brightening amplifies
+        # sensor noise and MediaPipe's landmark quality drops with grainy
+        # pixels. Small d keeps the cost low (~4-6 ms at 1080p).
+        if denoise_on:
+            frame = cv2.bilateralFilter(frame, d=5, sigmaColor=40, sigmaSpace=40)
 
         return frame
 
