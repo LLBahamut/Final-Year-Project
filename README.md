@@ -1,4 +1,4 @@
-# Gesture Recognition System
+# 👋 Gesture Recognition System
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.31-green?logo=google&logoColor=white)](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
@@ -7,34 +7,59 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 
-A real-time hand gesture recognition system that translates webcam hand movements and gestures into keyboard and mouse inputs. Built with MediaPipe and OpenCV, it enables hands-free control of games or any application — no additional hardware required.
+> *Hands-free keyboard and mouse control, powered by your webcam.*
+
+A real-time hand gesture recognition system that turns webcam hand movements into keyboard and mouse inputs using MediaPipe and OpenCV. Play games, drive presentations, or control any desktop application without touching a single key — no gloves, no Kinect, no extra hardware.
 
 ---
 
-## Table of Contents
+## 🌟 Highlights
 
-- [Demo](#demo)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Running the Application](#running-the-application)
-- [How It Works](#how-it-works)
-- [Controls](#controls)
-- [Supported Key Bindings](#supported-key-bindings)
-- [GUI Settings](#gui-settings)
-- [Configuration File](#configuration-file)
-- [Project Structure](#project-structure)
-- [Tech Stack](#tech-stack)
+- 🖐️ **Dual-hand control** — left hand drives WASD movement, right hand fires four configurable gesture actions, simultaneously
+- 🎯 **Four right-hand gestures** — Pinch, Thumbs Up, Point, Flat Palm — each bindable to any key or mouse button
+- 🌗 **Adaptive lighting** — automatic CLAHE + gamma + denoise preprocessing that re-tunes itself to dim or harsh environments in real time
+- 🖼️ **Always-on-top PiP overlay** — frameless, draggable camera feed that hovers over any application
+- 🎛️ **6-tab PyQt6 settings GUI** — configure camera, thresholds, preprocessing, bindings, overlay, and colours live
+- ⌨️ **Full keyboard + mouse binding** — arrows, F-keys, modifiers, navigation, mouse clicks, all remappable
 
 ---
 
-## Demo
+## ℹ️ Overview
+
+Built as a Final Year Project, this tool bridges the gap between computer vision and everyday desktop control. It runs entirely offline on a commodity webcam, reading 21 3D hand landmarks per frame via MediaPipe's `HandLandmarker` and translating them into held key / mouse events through `pynput`. The async detection pipeline, result caching, and adaptive preprocessing together produce stable, low-latency control that works in both bright and dim rooms without manual tuning.
+
+### ✍️ Author
+
+Built by **Arya Cenggata** ([@LLBahamut](https://github.com/LLBahamut)) as a final-year undergraduate project exploring real-time computer vision for accessible human-computer interaction.
+
+---
+
+## 📑 Table of Contents
+
+- [Highlights](#-highlights)
+- [Overview](#ℹ️-overview)
+- [Demo](#-demo)
+- [Features](#-features)
+- [Requirements](#-requirements)
+- [Installation](#️-installation)
+- [Running the Application](#-running-the-application)
+- [How It Works](#️-how-it-works)
+- [Controls](#-controls)
+- [Supported Key Bindings](#️-supported-key-bindings)
+- [GUI Settings](#️-gui-settings)
+- [Configuration File](#-configuration-file)
+- [Project Structure](#-project-structure)
+- [Tech Stack](#️-tech-stack)
+
+---
+
+## 🎬 Demo
 
 > Work in progress!
 
 ---
 
-## Features
+## ✨ Features
 
 - **Dual-Hand Control** — Left hand for WASD directional movement, right hand for 4 distinct gesture-triggered actions, both operating simultaneously
 - **4 Right-Hand Gestures** — Pinch, Thumbs Up, Point, and Flat Palm, each mapped to a configurable key or mouse button
@@ -42,14 +67,16 @@ A real-time hand gesture recognition system that translates webcam hand movement
 - **Gesture Debouncing** — Confirmation-frame system prevents flickering: 3 frames to activate, 5 frames to release
 - **Movement Hysteresis** — Separate activate/release thresholds prevent WASD key chatter near the movement boundary
 - **Picture-in-Picture Overlay** — Frameless, always-on-top, draggable camera feed window that stays visible over any application
-- **PyQt6 Configuration GUI** — 5-tab settings interface for camera, thresholds, key bindings, display, and colours
+- **PyQt6 Configuration GUI** — 6-tab settings interface for camera, thresholds, preprocessing, key bindings, display, and colours
 - **Headless Mode** — Run from the terminal with an OpenCV window for lightweight usage
 - **Async Detection** — Non-blocking MediaPipe pipeline with result caching eliminates landmark flickering
+- **Adaptive Lighting Pipeline** — Auto-brightness meta-controller measures EMA-smoothed frame luminance each tick and engages CLAHE + adaptive gamma + bilateral denoise on dim frames, or darkening gamma on over-exposed frames, keeping MediaPipe's input in its sweet spot without any user intervention
+- **Manual Preprocessing Overrides** — CLAHE (clip limit + tile size) and gamma correction can also be forced on independently of the auto path for full control
 - **Immediate Key Release** — All held keys are released instantly when a hand leaves the camera frame
 
 ---
 
-## Requirements
+## 📋 Requirements
 
 - Python 3.8+
 - A working webcam
@@ -57,7 +84,7 @@ A real-time hand gesture recognition system that translates webcam hand movement
 
 ---
 
-## Installation
+## ⬇️ Installation
 
 1. **Clone the repository**
 
@@ -81,7 +108,7 @@ pip install -r requirements.txt
 
 ---
 
-## Running the Application
+## 🚀 Running the Application
 
 ### GUI Mode (Recommended)
 
@@ -101,21 +128,23 @@ python main.py
 
 ---
 
-## How It Works
+## ⚙️ How It Works
 
 ```
-Webcam → Frame Capture → MediaPipe HandLandmarker → Gesture Classification → Key/Mouse Injection
-                              (async, 21 3D landmarks per hand)
+Webcam → Frame Capture → Adaptive Preprocessing → MediaPipe HandLandmarker → Gesture Classification → Key/Mouse Injection
+                         (CLAHE + gamma + denoise,
+                          auto-tuned per frame)
 ```
 
 ### Pipeline
 
 1. **Capture** — Frames are captured from the webcam at up to 1920x1080, horizontally flipped for a natural mirror view, and capped at 30 fps.
-2. **Detect** — Each frame is queued asynchronously to MediaPipe's `HandLandmarker`, which returns up to 2 sets of 21 3D landmarks per frame via a background callback thread.
-3. **Cache** — The latest valid detection result is cached so landmarks are drawn on every frame, even when the async callback hasn't fired yet. This eliminates landmark flickering.
-4. **Classify** — Hands are identified as left or right (closest to camera by Z-depth). The left hand controls WASD movement; the right hand is classified into one of four gestures.
-5. **Inject** — Active keys or mouse buttons are sent to the OS in real time via `pynput`.
-6. **Render** — The annotated camera feed (hand skeletons, gesture labels, WASD overlay, direction arrows) is displayed in the PiP overlay or OpenCV window.
+2. **Preprocess** — When auto-brightness is enabled, the pipeline measures the mean luminance of the frame (EMA-smoothed), then engages CLAHE + adaptive gamma on dim frames (below `preprocess_auto_low`) or darkening gamma on bright frames (above `preprocess_auto_high`). A bilateral filter is applied only on the dark path, where brightening amplifies sensor noise. The cost sits around 4-6 ms at 1080p and only runs when needed.
+3. **Detect** — Each frame is queued asynchronously to MediaPipe's `HandLandmarker`, which returns up to 2 sets of 21 3D landmarks per frame via a background callback thread.
+4. **Cache** — The latest valid detection result is cached so landmarks are drawn on every frame, even when the async callback hasn't fired yet. This eliminates landmark flickering.
+5. **Classify** — Hands are identified as left or right (closest to camera by Z-depth). The left hand controls WASD movement; the right hand is classified into one of four gestures.
+6. **Inject** — Active keys or mouse buttons are sent to the OS in real time via `pynput`.
+7. **Render** — The annotated camera feed (hand skeletons, gesture labels, WASD overlay, direction arrows) is displayed in the PiP overlay or OpenCV window.
 
 ### Left Hand — Movement Control
 
@@ -135,7 +164,7 @@ Webcam → Frame Capture → MediaPipe HandLandmarker → Gesture Classification
 
 ---
 
-## Controls
+## 🎮 Controls
 
 ### Left Hand — Movement
 
@@ -154,7 +183,7 @@ Webcam → Frame Capture → MediaPipe HandLandmarker → Gesture Classification
 | Gesture | Default Key | Description |
 |---|---|---|
 | Pinch | `Z` | Thumb tip and index tip close together |
-| Thumbs Up | `X` | Thumb extended upward, all other fingers curled |
+| Thumbs Up | `X` | Thumb extended, all other fingers curled |
 | Point | `Q` | Index finger extended, others curled |
 | Flat Palm | `C` | Open palm (3+ fingers extended) |
 
@@ -171,7 +200,7 @@ These shortcuts apply only when running `main.py` (the OpenCV window must be in 
 
 ---
 
-## Supported Key Bindings
+## ⌨️ Supported Key Bindings
 
 Any gesture or direction can be bound to:
 
@@ -192,14 +221,15 @@ In the GUI, click a key binding button then press any key or click a mouse butto
 
 ---
 
-## GUI Settings
+## 🖥️ GUI Settings
 
-Launching `gui.py` opens a settings window with five tabs:
+Launching `gui.py` opens a settings window with six tabs:
 
 | Tab | What you can configure |
 |---|---|
 | **Camera & Detection** | Camera index, resolution (up to 3840x2160), MediaPipe confidence thresholds (detection, presence, tracking) |
 | **Gesture Thresholds** | Palm detection sensitivity, movement activate/release thresholds, hand loss grace period, hand proximity, pinch distance, finger curl ratio |
+| **Preprocessing** | CLAHE toggle + clip limit + tile size, gamma correction toggle + value, auto-brightness toggle + target/low/high thresholds + EMA smoothing |
 | **Keys & Controls** | Enable/disable actual keypresses and debug output; remap all WASD keys and right-hand gesture keys (keyboard or mouse) |
 | **Display & Overlay** | PiP scale factor, WASD overlay toggle, key box size/spacing, overlay position |
 | **Colors** | Hand skeleton colours (left/right), WASD key active/inactive colours, label text colours |
@@ -212,7 +242,7 @@ Settings are not auto-saved to disk. Use `config.json` to persist them between r
 
 ---
 
-## Configuration File
+## 📝 Configuration File
 
 Settings can be persisted by saving a `config.json` in the project root. `main.py` automatically loads it on startup if present.
 
@@ -292,6 +322,22 @@ cfg = GestureConfig.from_json("config.json")  # load back
 | `gesture_confirm_frames` | `3` | Consecutive frames required to confirm a new gesture |
 | `gesture_release_frames` | `5` | Consecutive frames required to confirm gesture release |
 
+#### Frame Preprocessing
+
+| Field | Default | Description |
+|---|---|---|
+| `preprocess_clahe_enabled` | `false` | Manually force CLAHE on the L channel (LAB space) |
+| `preprocess_clahe_clip_limit` | `2.0` | CLAHE clip limit — higher = stronger local contrast |
+| `preprocess_clahe_tile_size` | `8` | CLAHE grid tile size (NxN) |
+| `preprocess_gamma_enabled` | `false` | Manually force gamma correction |
+| `preprocess_gamma_value` | `1.0` | Gamma value — <1 brightens, >1 darkens, 1.0 = no change |
+| `preprocess_auto_enabled` | `true` | Adaptive meta-controller: engages CLAHE/gamma/denoise automatically based on frame luminance |
+| `preprocess_auto_target` | `120` | Target mean luminance (0-255) the adaptive path aims for |
+| `preprocess_auto_low` | `80` | Below this mean luminance, the dark path (brighten + denoise) triggers |
+| `preprocess_auto_high` | `180` | Above this mean luminance, the bright path (darken) triggers |
+| `preprocess_auto_smoothing` | `0.2` | EMA factor applied to measured brightness (0-1, higher = more reactive) |
+| `preprocess_auto_denoise` | `true` | Enable bilateral filter on the auto-dark path to suppress amplified sensor noise |
+
 #### Display & Overlay
 
 | Field | Default | Description |
@@ -318,7 +364,7 @@ cfg = GestureConfig.from_json("config.json")  # load back
 
 ---
 
-## Project Structure
+## 📂 Project Structure
 
 ```
 Final Year Project/
@@ -335,7 +381,7 @@ Final Year Project/
 
 ---
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 | Library | Version | Role |
 |---|---|---|
