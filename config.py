@@ -20,7 +20,7 @@ class GestureConfig:
     palm_min_fingers: int = 3
 
     # Movement thresholds
-    movement_threshold_activate: float = 0.12
+    movement_threshold_activate: float = 0.05
     movement_threshold_release: float = 0.08
 
     # Hand tracking
