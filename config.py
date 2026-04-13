@@ -55,11 +55,11 @@ class GestureConfig:
     gesture_release_frames: int = 5
 
     # Frame preprocessing
-    preprocess_clahe_enabled: bool = False
+    preprocess_clahe_enabled: bool = True
     preprocess_clahe_clip_limit: float = 2.0
     preprocess_clahe_tile_size: int = 8
 
-    preprocess_gamma_enabled: bool = False
+    preprocess_gamma_enabled: bool = True
     preprocess_gamma_value: float = 1.0  # 1.0 = no change; <1 brightens, >1 darkens
 
     preprocess_auto_enabled: bool = True
