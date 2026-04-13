@@ -26,6 +26,7 @@ class GestureConfig:
     # Hand tracking
     hand_loss_grace_period: float = 2.0
     hand_proximity_threshold: float = 0.2
+    async_result_timeout_frames: int = 30   # ~1s at 30fps
 
     # Keyboard control
     enable_actual_keypresses: bool = True

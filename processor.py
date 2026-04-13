@@ -118,6 +118,9 @@ class GestureProcessor:
         # Timestamp tracking for process_frame
         self._last_timestamp_ms = 0
 
+        # Consecutive frames where get_latest_result() returned None
+        self._consecutive_none_frames = 0
+
         # Preprocessing state
         self._gamma_lut_cache = {}      # {gamma_rounded: np.ndarray LUT}
         self._ema_brightness = None     # smoothed mean luminance (EMA)
@@ -1040,6 +1043,7 @@ class GestureProcessor:
 
         result = self.get_latest_result()
         if result is not None:
+            self._consecutive_none_frames = 0
             self._last_drawn_result = result        # refresh cache
             try:
                 self.process_left_hand_control(result)
@@ -1048,9 +1052,12 @@ class GestureProcessor:
                 if self.cfg.enable_debug_output:
                     print(f"Frame processing error: {e}")
         else:
-            # No fresh result — release all held keys immediately
-            self.release_all_keys()
-            self.release_right_hand_gesture_key()
+            # Async callback hasn't fired yet — tolerate brief gaps.
+            # Only force-release after prolonged silence (camera disconnect, etc.)
+            self._consecutive_none_frames += 1
+            if self._consecutive_none_frames >= self.cfg.async_result_timeout_frames:
+                self.release_all_keys()
+                self.release_right_hand_gesture_key()
 
         # Always draw from cache — never skips a frame
         if self._last_drawn_result is not None:
