@@ -72,63 +72,6 @@ QPushButton:hover {
 QPushButton:pressed {
     background: #f5f5f5;
 }
-QSpinBox, QDoubleSpinBox {
-    background: #ffffff;
-    color: #1a1a1a;
-    border: 1px solid #d0d0d5;
-    border-radius: 4px;
-    padding: 4px;
-    min-height: 20px;
-}
-QSpinBox:focus, QDoubleSpinBox:focus {
-    border: 1px solid #0a8f80;
-}
-QSpinBox::up-button, QDoubleSpinBox::up-button {
-    background: #efefef;
-    border-left: 1px solid #d0d0d5;
-    border-bottom: 1px solid #d0d0d5;
-    width: 20px;
-    subcontrol-position: top right;
-    subcontrol-origin: border;
-    border-top-right-radius: 4px;
-}
-QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {
-    background: #0a8f80;
-}
-QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed {
-    background: #0e9f8e;
-}
-QSpinBox::down-button, QDoubleSpinBox::down-button {
-    background: #efefef;
-    border-left: 1px solid #d0d0d5;
-    border-top: 1px solid #d0d0d5;
-    width: 20px;
-    subcontrol-position: bottom right;
-    subcontrol-origin: border;
-    border-bottom-right-radius: 4px;
-}
-QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
-    background: #0a8f80;
-}
-QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
-    background: #0e9f8e;
-}
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxwb2x5Z29uIHBvaW50cz0iNCwxIDcsNyAxLDciIGZpbGw9IiMzMzMzMzMiLz48L3N2Zz4=");
-    width: 8px;
-    height: 8px;
-}
-QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxwb2x5Z29uIHBvaW50cz0iNCwxIDcsNyAxLDciIGZpbGw9IiNmZmZmZmYiLz48L3N2Zz4=");
-}
-QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxwb2x5Z29uIHBvaW50cz0iMSwxIDcsMSA0LDciIGZpbGw9IiMzMzMzMzMiLz48L3N2Zz4=");
-    width: 8px;
-    height: 8px;
-}
-QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxwb2x5Z29uIHBvaW50cz0iMSwxIDcsMSA0LDciIGZpbGw9IiNmZmZmZmYiLz48L3N2Zz4=");
-}
 QSlider::groove:horizontal {
     height: 4px;
     background: #d0d0d5;
@@ -1171,8 +1114,11 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from PyQt6.QtWidgets import QStyleFactory
     app = QApplication(sys.argv)
     app.setStyleSheet(LIGHT_STYLESHEET)
+    # Force native style for spinboxes so arrows render correctly
+    app.setStyle(QStyleFactory.create("Fusion"))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
