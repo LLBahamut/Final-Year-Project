@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
-    QColor, QKeyEvent, QIcon, QPixmap, QPainter,
+    QColor, QKeyEvent, QIcon, QPixmap, QPainter, QPen,
     QShortcut, QKeySequence,
 )
 
@@ -95,20 +95,7 @@ QSlider::sub-page:horizontal {
 QCheckBox {
     color: #1a1a1a;
     spacing: 6px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border: 1px solid #d0d0d5;
-    border-radius: 3px;
-    background: #ffffff;
-}
-QCheckBox::indicator:checked {
-    background: #0a8f80;
-    border-color: #0a8f80;
-}
-QCheckBox::indicator:hover {
-    border-color: #0a8f80;
+    padding: 2px 0;
 }
 QScrollArea {
     border: none;
@@ -417,7 +404,7 @@ class MainWindow(QMainWindow):
         save_row = QHBoxLayout()
         self.chk_show_hints = QCheckBox("Show hints")
         self.chk_show_hints.setChecked(True)
-        self.chk_show_hints.setStyleSheet("color: #6b6b6b; font-size: 8pt;")
+        self.chk_show_hints.setStyleSheet("color: #4a4a4a; font-size: 8pt;")
         self.chk_show_hints.toggled.connect(self._toggle_hints)
         save_row.addWidget(self.chk_show_hints)
         save_row.addStretch()
@@ -1117,9 +1104,37 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
+    import tempfile
     from PyQt6.QtWidgets import QStyleFactory
+
     app = QApplication(sys.argv)
-    app.setStyleSheet(LIGHT_STYLESHEET)
+
+    # Generate a white checkmark icon for styled checkboxes
+    _cm = QPixmap(12, 12)
+    _cm.fill(QColor(0, 0, 0, 0))
+    _p = QPainter(_cm)
+    _p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    _p.setPen(QPen(QColor("#ffffff"), 2.0))
+    _p.drawLine(2, 6, 5, 9)
+    _p.drawLine(5, 9, 10, 3)
+    _p.end()
+    _check_path = os.path.join(tempfile.gettempdir(), "gesture_check.png")
+    _cm.save(_check_path)
+
+    _checkbox_qss = f"""
+QCheckBox::indicator {{
+    width: 14px; height: 14px;
+    border: 1.5px solid #9a9a9f; border-radius: 3px;
+    background: #ffffff; margin-top: 1px;
+}}
+QCheckBox::indicator:checked {{
+    background: #0a8f80; border-color: #078070;
+    image: url({_check_path.replace(chr(92), '/')});
+}}
+QCheckBox::indicator:hover {{ border-color: #0a8f80; }}
+"""
+    app.setStyleSheet(LIGHT_STYLESHEET + _checkbox_qss)
     # Force native style for spinboxes so arrows render correctly
     app.setStyle(QStyleFactory.create("Fusion"))
     window = MainWindow()
