@@ -22,7 +22,7 @@ from pip_overlay import CameraWorker, PipOverlay
 LIGHT_STYLESHEET = """
 QMainWindow, QWidget {
     background-color: #f5f5f5;
-    color: #1a1a1a;
+    color: #000000;
     font-family: "Segoe UI", sans-serif;
 }
 QTabWidget::pane {
@@ -32,18 +32,18 @@ QTabWidget::pane {
 }
 QTabBar::tab {
     background: #ffffff;
-    color: #6b6b6b;
+    color: #000000;
     padding: 12px 14px;
     border: none;
     border-bottom: 2px solid transparent;
 }
 QTabBar::tab:selected {
-    color: #1a1a1a;
+    color: #000000;
     border-bottom: 2px solid #0a8f80;
     background: #f5f5f5;
 }
 QTabBar::tab:hover:!selected {
-    color: #1a1a1a;
+    color: #000000;
     background: #efefef;
 }
 QSpinBox, QDoubleSpinBox {
@@ -60,11 +60,11 @@ QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
     padding: 0 4px;
-    color: #6b6b6b;
+    color: #000000;
 }
 QPushButton {
     background: #efefef;
-    color: #1a1a1a;
+    color: #000000;
     border: 1px solid #d0d0d5;
     border-radius: 4px;
     padding: 6px 12px;
@@ -93,7 +93,7 @@ QSlider::sub-page:horizontal {
     height: 4px;
 }
 QCheckBox {
-    color: #1a1a1a;
+    color: #000000;
     spacing: 6px;
     padding: 2px 0;
 }
@@ -122,7 +122,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 }
 QToolTip {
     background: #ffffff;
-    color: #1a1a1a;
+    color: #000000;
     border: 1px solid #d0d0d5;
     padding: 6px 8px;
     font-size: 8pt;
@@ -145,9 +145,9 @@ _BTN_DANGER = (
 _COLLAPSIBLE_STYLE = (
     "QPushButton { text-align: left; background: #ffffff;"
     "border: 1px solid #d0d0d5; border-radius: 6px;"
-    "padding: 8px 12px; color: #6b6b6b; }"
-    "QPushButton:hover { background: #efefef; color: #1a1a1a; }"
-    "QPushButton:checked { color: #1a1a1a; border-color: #0a8f80; }"
+    "padding: 8px 12px; color: #000000; }"
+    "QPushButton:hover { background: #efefef; color: #000000; }"
+    "QPushButton:checked { color: #000000; border-color: #0a8f80; }"
 )
 
 # ---------------------------------------------------------------------------
@@ -195,10 +195,9 @@ def _stacked_label(name: str, hint: str = "") -> QWidget:
 
     if hint:
         icon_lbl = QLabel("ⓘ")
-        icon_lbl.setStyleSheet("color: #8888a0; font-size: 10px;")
+        icon_lbl.setStyleSheet("color: #000000; font-size: 10px;")
         icon_lbl.setToolTip(hint)
         icon_lbl.setCursor(Qt.CursorShape.WhatsThisCursor)
-        icon_lbl.setProperty("is_hint", True)
         layout.addWidget(icon_lbl)
 
     layout.addStretch()
@@ -402,11 +401,6 @@ class MainWindow(QMainWindow):
 
         # Save button row
         save_row = QHBoxLayout()
-        self.chk_show_hints = QCheckBox("Show hints")
-        self.chk_show_hints.setChecked(True)
-        self.chk_show_hints.setStyleSheet("color: #4a4a4a; font-size: 8pt;")
-        self.chk_show_hints.toggled.connect(self._toggle_hints)
-        save_row.addWidget(self.chk_show_hints)
         save_row.addStretch()
         self.btn_save = QPushButton("💾 Save Settings")
         self.btn_save.setMinimumWidth(120)
@@ -638,7 +632,7 @@ class MainWindow(QMainWindow):
 
         hint = QLabel("Fine-tune gesture detection. Default values work well for most setups.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #6b6b6b; padding: 4px 0;")
+        hint.setStyleSheet("color: #000000; padding: 4px 0;")
         layout.addWidget(hint)
 
         # -- Left Hand — Movement (collapsed) --
@@ -762,7 +756,7 @@ class MainWindow(QMainWindow):
         info.setWordWrap(True)
         info.setStyleSheet(
             "background: #e8f5f3; border-left: 2px solid #0a8f80;"
-            "padding: 6px 8px; color: #6b6b6b;"
+            "padding: 6px 8px; color: #000000;"
         )
         layout.addWidget(info)
 
@@ -1016,11 +1010,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
-
-    def _toggle_hints(self, visible: bool):
-        for widget in self.findChildren(QLabel):
-            if widget.property("is_hint"):
-                widget.setVisible(visible)
 
     def _restore_defaults(self):
         self._populate(GestureConfig())
