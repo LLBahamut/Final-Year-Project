@@ -4,13 +4,44 @@ import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QSpinBox, QDoubleSpinBox, QSlider, QCheckBox, QPushButton,
-    QLabel, QColorDialog, QGroupBox, QScrollArea,
+    QLabel, QColorDialog, QGroupBox, QScrollArea, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QColor, QKeyEvent, QIcon, QPixmap, QPainter, QPen,
     QShortcut, QKeySequence,
 )
+
+# Common aspect ratios → (ratio_w, ratio_h, preset widths)
+_ASPECT_RATIOS = {
+    "16:9": (16, 9, [640, 854, 1280, 1600, 1920, 2560, 3840]),
+    "4:3":  (4,  3, [320, 640, 800, 1024, 1280, 1600]),
+    "3:2":  (3,  2, [720, 1080, 1440, 2160]),
+    "1:1":  (1,  1, [240, 480, 720, 1080]),
+    "21:9": (21, 9, [2560, 3440, 3840]),
+}
+
+
+def _list_cameras():
+    """Return [(index, name), ...] of connected cameras.
+
+    Prefers pygrabber (DirectShow) on Windows for real device names.
+    Falls back to probing indices with OpenCV (generic names).
+    """
+    try:
+        from pygrabber.dshow_graph import FilterGraph
+        return list(enumerate(FilterGraph().get_input_devices()))
+    except Exception:
+        pass
+
+    import cv2
+    cams = []
+    for i in range(8):
+        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            cams.append((i, f"Camera {i}"))
+            cap.release()
+    return cams
 
 from config import GestureConfig
 from pip_overlay import CameraWorker, PipOverlay
@@ -498,28 +529,38 @@ class MainWindow(QMainWindow):
         cam_form = QFormLayout(cam_group)
         cam_form.setVerticalSpacing(8)
 
-        self.spin_camera_index = QSpinBox()
-        self.spin_camera_index.setRange(0, 10)
+        self.combo_camera = QComboBox()
+        self._refresh_cameras()
+        btn_refresh = QPushButton("↻")
+        btn_refresh.setFixedWidth(30)
+        btn_refresh.setToolTip("Re-scan for cameras")
+        btn_refresh.clicked.connect(self._refresh_cameras)
+        cam_row = QHBoxLayout()
+        cam_row.setContentsMargins(0, 0, 0, 0)
+        cam_row.addWidget(self.combo_camera, 1)
+        cam_row.addWidget(btn_refresh)
+        cam_row_widget = QWidget()
+        cam_row_widget.setLayout(cam_row)
         cam_form.addRow(
-            _stacked_label("Camera Index", "0 = built-in webcam, 1+ = external camera"),
-            self.spin_camera_index,
+            _stacked_label("Camera", "detected cameras on your system"),
+            cam_row_widget,
         )
 
-        self.spin_width = QSpinBox()
-        self.spin_width.setRange(320, 3840)
-        self.spin_width.setSingleStep(160)
+        self.combo_aspect = QComboBox()
+        self.combo_aspect.addItems(list(_ASPECT_RATIOS.keys()) + ["Custom"])
         cam_form.addRow(
-            _stacked_label("Resolution Width", "higher = sharper image, uses more CPU"),
-            self.spin_width,
+            _stacked_label("Aspect Ratio", "picks common resolutions"),
+            self.combo_aspect,
         )
 
-        self.spin_height = QSpinBox()
-        self.spin_height.setRange(240, 2160)
-        self.spin_height.setSingleStep(120)
+        self.combo_resolution = QComboBox()
+        self.combo_resolution.setEditable(True)
         cam_form.addRow(
-            _stacked_label("Resolution Height", "higher = sharper image, uses more CPU"),
-            self.spin_height,
+            _stacked_label("Resolution", "format: WIDTHxHEIGHT (e.g. 1280x720)"),
+            self.combo_resolution,
         )
+
+        self.combo_aspect.currentTextChanged.connect(self._on_aspect_changed)
 
         layout.addWidget(cam_group)
 
@@ -636,7 +677,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(hint)
 
         # -- Left Hand — Movement (collapsed) --
-        self._sec_left_hand = CollapsibleSection("🖐️ Left Hand — Movement")
+        self._sec_left_hand = CollapsibleSection("🖐️ Left Hand - Movement")
         lh_form = self._sec_left_hand.form_layout()
 
         self.spin_palm_ext = QDoubleSpinBox()
@@ -695,7 +736,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._sec_left_hand)
 
         # -- Right Hand — Gestures (collapsed) --
-        self._sec_right_hand = CollapsibleSection("✋ Right Hand — Gestures")
+        self._sec_right_hand = CollapsibleSection("✋ Right Hand - Gestures")
         rh_form = self._sec_right_hand.form_layout()
 
         self.spin_pinch_dist = QDoubleSpinBox()
@@ -891,11 +932,84 @@ class MainWindow(QMainWindow):
     # Config <-> widgets
     # ------------------------------------------------------------------
 
+    def _refresh_cameras(self):
+        prev_idx = (
+            self.combo_camera.currentData()
+            if hasattr(self, "combo_camera") and self.combo_camera.count() > 0
+            else None
+        )
+        self.combo_camera.blockSignals(True)
+        self.combo_camera.clear()
+        for idx, name in _list_cameras():
+            self.combo_camera.addItem(f"{idx}: {name}", idx)
+        if self.combo_camera.count() == 0:
+            self.combo_camera.addItem("No cameras found", 0)
+        if prev_idx is not None:
+            self._select_camera(prev_idx)
+        self.combo_camera.blockSignals(False)
+
+    def _select_camera(self, index: int):
+        for i in range(self.combo_camera.count()):
+            if self.combo_camera.itemData(i) == index:
+                self.combo_camera.setCurrentIndex(i)
+                return
+        # Not present; fall back to first entry
+        self.combo_camera.setCurrentIndex(0)
+
+    def _current_camera_index(self) -> int:
+        data = self.combo_camera.currentData()
+        return int(data) if data is not None else 0
+
+    def _current_resolution(self) -> tuple:
+        text = self.combo_resolution.currentText().lower().replace(" ", "")
+        if "x" in text:
+            w_str, _, h_str = text.partition("x")
+            try:
+                return int(w_str), int(h_str)
+            except ValueError:
+                pass
+        return 1280, 720
+
+    def _populate_resolution_dropdown(self, ratio: str):
+        self.combo_resolution.blockSignals(True)
+        self.combo_resolution.clear()
+        if ratio in _ASPECT_RATIOS:
+            rw, rh, widths = _ASPECT_RATIOS[ratio]
+            self.combo_resolution.addItems(
+                [f"{w}x{int(w * rh / rw)}" for w in widths]
+            )
+        self.combo_resolution.blockSignals(False)
+
+    def _on_aspect_changed(self, ratio: str):
+        prev_text = self.combo_resolution.currentText()
+        self._populate_resolution_dropdown(ratio)
+        if ratio in _ASPECT_RATIOS:
+            _, _, widths = _ASPECT_RATIOS[ratio]
+            default_idx = len(widths) // 2
+            self.combo_resolution.setCurrentIndex(default_idx)
+        else:
+            self.combo_resolution.blockSignals(True)
+            self.combo_resolution.setEditText(prev_text)
+            self.combo_resolution.blockSignals(False)
+
+    def _set_resolution(self, w: int, h: int):
+        match = "Custom"
+        for name, (rw, rh, _) in _ASPECT_RATIOS.items():
+            if w * rh == h * rw:
+                match = name
+                break
+        self.combo_aspect.blockSignals(True)
+        self.combo_aspect.setCurrentText(match)
+        self.combo_aspect.blockSignals(False)
+        self._populate_resolution_dropdown(match)
+        self.combo_resolution.blockSignals(True)
+        self.combo_resolution.setCurrentText(f"{w}x{h}")
+        self.combo_resolution.blockSignals(False)
+
     def _populate(self, cfg: GestureConfig):
         # Detection
-        self.spin_camera_index.setValue(cfg.camera_index)
-        self.spin_width.setValue(cfg.desired_width)
-        self.spin_height.setValue(cfg.desired_height)
+        self._select_camera(cfg.camera_index)
+        self._set_resolution(cfg.desired_width, cfg.desired_height)
         self.slider_detection.setValue(int(cfg.min_hand_detection_confidence * 100))
         self.slider_presence.setValue(int(cfg.min_hand_presence_confidence * 100))
         self.slider_tracking.setValue(int(cfg.min_tracking_confidence * 100))
@@ -955,9 +1069,9 @@ class MainWindow(QMainWindow):
 
     def _collect(self) -> GestureConfig:
         return GestureConfig(
-            camera_index=self.spin_camera_index.value(),
-            desired_width=self.spin_width.value(),
-            desired_height=self.spin_height.value(),
+            camera_index=self._current_camera_index(),
+            desired_width=self._current_resolution()[0],
+            desired_height=self._current_resolution()[1],
             min_hand_detection_confidence=self.slider_detection.value() / 100,
             min_hand_presence_confidence=self.slider_presence.value() / 100,
             min_tracking_confidence=self.slider_tracking.value() / 100,
