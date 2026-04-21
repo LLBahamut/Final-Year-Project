@@ -19,7 +19,7 @@ A real-time hand gesture recognition system that turns webcam hand movements int
 - 🎯 **Four right-hand gestures** — Pinch, Thumbs Up, Point, Flat Palm — each bindable to any key or mouse button
 - 🌗 **Adaptive lighting** — automatic CLAHE + gamma + denoise preprocessing that re-tunes itself to dim or harsh environments in real time
 - 🖼️ **Always-on-top PiP overlay** — frameless, draggable camera feed that hovers over any application
-- 🎛️ **6-tab PyQt6 settings GUI** — configure camera, thresholds, preprocessing, bindings, overlay, and colours live
+- 🎛️ **4-tab PyQt6 settings GUI** — light-themed interface with auto-detected camera picker, aspect-ratio-aware resolution selector, Save (Ctrl+S), and collapsible advanced sections
 - ⌨️ **Full keyboard + mouse binding** — arrows, F-keys, modifiers, navigation, mouse clicks, all remappable
 
 ---
@@ -67,7 +67,7 @@ Built by **Arya Cenggata** ([@LLBahamut](https://github.com/LLBahamut)) as a fin
 - **Gesture Debouncing** — Confirmation-frame system prevents flickering: 3 frames to activate, 5 frames to release
 - **Movement Hysteresis** — Separate activate/release thresholds prevent WASD key chatter near the movement boundary
 - **Picture-in-Picture Overlay** — Frameless, always-on-top, draggable camera feed window that stays visible over any application
-- **PyQt6 Configuration GUI** — 6-tab settings interface for camera, thresholds, preprocessing, key bindings, display, and colours
+- **PyQt6 Configuration GUI** — 4-tab settings interface (Detection, Gestures, Bindings, Display) with a light Fusion theme, auto-detected camera picker, aspect-ratio-aware resolution selector, Save (Ctrl+S), and collapsible advanced sections
 - **Headless Mode** — Run from the terminal with an OpenCV window for lightweight usage
 - **Async Detection** — Non-blocking MediaPipe pipeline with result caching eliminates landmark flickering
 - **Adaptive Lighting Pipeline** — Auto-brightness meta-controller measures EMA-smoothed frame luminance each tick and engages CLAHE + adaptive gamma + bilateral denoise on dim frames, or darkening gamma on over-exposed frames, keeping MediaPipe's input in its sweet spot without any user intervention
@@ -223,22 +223,21 @@ In the GUI, click a key binding button then press any key or click a mouse butto
 
 ## 🖥️ GUI Settings
 
-Launching `gui.py` opens a settings window with six tabs:
+Launching `gui.py` opens a settings window with four tabs. Advanced / less common options are tucked into collapsible sections so the default view stays clean.
 
 | Tab | What you can configure |
 |---|---|
-| **Camera & Detection** | Camera index, resolution (up to 3840x2160), MediaPipe confidence thresholds (detection, presence, tracking) |
-| **Gesture Thresholds** | Palm detection sensitivity, movement activate/release thresholds, hand loss grace period, hand proximity, pinch distance, finger curl ratio |
-| **Preprocessing** | CLAHE toggle + clip limit + tile size, gamma correction toggle + value, auto-brightness toggle + target/low/high thresholds + EMA smoothing |
-| **Keys & Controls** | Enable/disable actual keypresses and debug output; remap all WASD keys and right-hand gesture keys (keyboard or mouse) |
-| **Display & Overlay** | PiP scale factor, WASD overlay toggle, key box size/spacing, overlay position |
-| **Colors** | Hand skeleton colours (left/right), WASD key active/inactive colours, label text colours |
+| **🎥 Detection** | Camera picker (auto-detected device names via DirectShow with a ↻ re-scan button), Aspect Ratio + Resolution selector (`WIDTHxHEIGHT` presets per ratio, or Custom), MediaPipe confidence thresholds (detection, presence, tracking), full preprocessing controls (CLAHE, gamma, auto-brightness + EMA smoothing + denoise) |
+| **🎯 Gestures** | Left-hand movement tuning (palm extension, min fingers, activate/release thresholds, hand-loss grace, hand proximity), right-hand gesture thresholds (pinch distance, finger curl ratio), debounce timing (confirm/release frames, auto-denoise) |
+| **⌨️ Bindings** | Enable/disable actual keypresses and debug output, remap all WASD keys and the four right-hand gesture keys (keyboard or mouse — click a button and press any key) |
+| **🖥️ Display** | PiP scale, WASD overlay toggle, overlay layout (key size, spacing, position), all overlay / skeleton colours (BGR colour pickers) |
 
 **Controls:**
-- **Start / Stop** — Toggle gesture detection and PiP overlay
-- **Restore Defaults** — Reset all fields to default values without stopping a running session
+- **💾 Save Settings** (or `Ctrl+S`) — Write current settings to `config.json`
+- **▶ Start / ⏹ Stop** — Toggle gesture detection and PiP overlay; status dot pulses teal while running, turns red on error
+- **🔄 Restore Defaults** — Reset all fields to default values without stopping a running session
 
-Settings are not auto-saved to disk. Use `config.json` to persist them between runs.
+Settings are read from `config.json` on launch and written on Save.
 
 ---
 
@@ -261,7 +260,7 @@ cfg = GestureConfig.from_json("config.json")  # load back
 
 | Field | Default | Description |
 |---|---|---|
-| `camera_index` | `0` | Index of the webcam to use |
+| `camera_index` | `0` | Index of the webcam to use (the GUI's camera picker writes the detected-device index here; edit manually for headless mode) |
 | `desired_width` | `1920` | Camera capture width in pixels |
 | `desired_height` | `1080` | Camera capture height in pixels |
 
@@ -390,3 +389,4 @@ Final Year Project/
 | [NumPy](https://numpy.org/) | >= 1.24 | Array operations |
 | [pynput](https://pynput.readthedocs.io/) | latest | OS-level keyboard and mouse input injection |
 | [PyQt6](https://pypi.org/project/PyQt6/) | >= 6.5 | Settings GUI, PiP overlay window, camera worker thread |
+| [pygrabber](https://pypi.org/project/pygrabber/) | >= 0.2 | Windows DirectShow camera-name enumeration for the GUI camera picker (Windows-only) |
