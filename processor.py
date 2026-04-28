@@ -127,6 +127,22 @@ class GestureProcessor:
         self._clahe = None              # lazy-initialised cv2.CLAHE instance
         self._clahe_params = None       # (clip, tile) tuple used for current instance
 
+        # Most recent preprocessing decisions, surfaced for the metrics logger.
+        self._last_preproc_flags = {
+            "brightness_smoothed": float("nan"),
+            "clahe_applied": 0,
+            "gamma_applied": 0,
+            "denoise_applied": 0,
+        }
+
+        # Optional performance logger (NullLogger by default — zero-cost no-op)
+        from metrics import NullLogger
+        self._logger = NullLogger()
+
+    def attach_logger(self, logger):
+        """Attach a metrics logger (or NullLogger to disable instrumentation)."""
+        self._logger = logger
+
     @property
     def key_mapping(self):
         return {
@@ -962,7 +978,13 @@ class GestureProcessor:
         gamma_val = cfg.preprocess_gamma_value
         denoise_on = False  # enabled below only when auto-dark path triggers
 
+        flags = self._last_preproc_flags
+        flags["clahe_applied"] = 0
+        flags["gamma_applied"] = 0
+        flags["denoise_applied"] = 0
+
         if not (clahe_on or gamma_on or cfg.preprocess_auto_enabled):
+            flags["brightness_smoothed"] = float("nan")
             return frame  # fast path: nothing to do
 
         gray_mean = float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
@@ -989,6 +1011,8 @@ class GestureProcessor:
                 gamma_val = math.log(mv / 255.0) / math.log(tv / 255.0)
                 gamma_val = max(0.3, min(3.0, gamma_val))
 
+        flags["brightness_smoothed"] = float(mean_v)
+
         if clahe_on:
             clip = cfg.preprocess_clahe_clip_limit
             tile = max(1, cfg.preprocess_clahe_tile_size)
@@ -1000,15 +1024,18 @@ class GestureProcessor:
             l_ch, a_ch, b_ch = cv2.split(lab)
             l_ch = self._clahe.apply(l_ch)
             frame = cv2.cvtColor(cv2.merge([l_ch, a_ch, b_ch]), cv2.COLOR_LAB2BGR)
+            flags["clahe_applied"] = 1
 
         if gamma_on and abs(gamma_val - 1.0) > 1e-3:
             frame = cv2.LUT(frame, self._get_gamma_lut(gamma_val))
+            flags["gamma_applied"] = 1
 
         # Bilateral denoise only on the auto-dark path — brightening amplifies
         # sensor noise and MediaPipe's landmark quality drops with grainy
         # pixels. Small d keeps the cost low (~4-6 ms at 1080p).
         if denoise_on:
             frame = cv2.bilateralFilter(frame, d=5, sigmaColor=40, sigmaSpace=40)
+            flags["denoise_applied"] = 1
 
         return frame
 
@@ -1029,6 +1056,7 @@ class GestureProcessor:
         """
         frame = cv2.flip(frame, 1)
         frame = self._preprocess_frame(frame)
+        self._logger.mark_preproc_done(self._last_preproc_flags)
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -1042,6 +1070,7 @@ class GestureProcessor:
         self.landmarker.detect_async(mp_image, timestamp_ms)
 
         result = self.get_latest_result()
+        self._logger.mark_landmarks_done()
         if result is not None:
             self._consecutive_none_frames = 0
             self._last_drawn_result = result        # refresh cache
@@ -1064,6 +1093,10 @@ class GestureProcessor:
             frame = self.draw_landmarks_on_image(frame, self._last_drawn_result)
 
         self.draw_wasd_overlay(frame)
+
+        pred = self.right_hand_gesture_state.get("active_gesture") or "none"
+        active_key = self.right_hand_gesture_state.get("active_key")
+        self._logger.mark_gesture_done(pred, events_fired=str(active_key or ""))
 
         return frame
 
