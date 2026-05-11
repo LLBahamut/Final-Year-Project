@@ -76,6 +76,17 @@ GESTURE_DISPLAY_NAMES = {
     "point":    "POINT",
 }
 
+# Translate processor-internal gesture names to the canonical labels used by
+# the metrics module (`metrics._GESTURE_LABELS`). Without this, predictions
+# of "thumbsup" and "palm" would be silently downgraded to "none" by the
+# logger's label-validation check, badly distorting the confusion matrix.
+GESTURE_NAME_MAP = {
+    "thumbsup": "thumbs_up",
+    "palm":     "flat_palm",
+    "pinch":    "pinch",
+    "point":    "point",
+}
+
 
 class GestureProcessor:
     def __init__(self, cfg: GestureConfig):
@@ -1071,6 +1082,7 @@ class GestureProcessor:
 
         result = self.get_latest_result()
         self._logger.mark_landmarks_done()
+        pipeline_complete = result is not None
         if result is not None:
             self._consecutive_none_frames = 0
             self._last_drawn_result = result        # refresh cache
@@ -1094,9 +1106,17 @@ class GestureProcessor:
 
         self.draw_wasd_overlay(frame)
 
-        pred = self.right_hand_gesture_state.get("active_gesture") or "none"
+        # Translate the processor's internal gesture name ("thumbsup"/"palm")
+        # to the canonical label the metrics module recognises ("thumbs_up"/
+        # "flat_palm"). Anything unmapped, or None, becomes "none".
+        raw_gesture = self.right_hand_gesture_state.get("active_gesture")
+        pred = GESTURE_NAME_MAP.get(raw_gesture, raw_gesture) or "none"
         active_key = self.right_hand_gesture_state.get("active_key")
-        self._logger.mark_gesture_done(pred, events_fired=str(active_key or ""))
+        self._logger.mark_gesture_done(
+            pred,
+            events_fired=str(active_key or ""),
+            pipeline_complete=pipeline_complete,
+        )
 
         return frame
 
