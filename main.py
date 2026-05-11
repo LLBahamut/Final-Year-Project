@@ -82,8 +82,11 @@ def main():
     while True:
         frame_start = time.time()
 
-        ret, frame = cap.read()
+        # Start the metrics timer BEFORE cap.read() so camera capture latency
+        # is included in processing_time_ms. The logger is a NullLogger no-op
+        # when metrics are disabled, so this is free in the non-eval path.
         logger.start_frame()
+        ret, frame = cap.read()
         if not ret:
             consecutive_failures += 1
             if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
