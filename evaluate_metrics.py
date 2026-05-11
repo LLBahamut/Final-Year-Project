@@ -124,7 +124,9 @@ def _fp_fn_by_lighting(rows: list[dict]) -> dict:
     return dict(by_light)
 
 
-def _timing_stats(rows: list[dict], col: str) -> dict:
+def _timing_stats(rows: list[dict], col: str, only_complete: bool = False) -> dict:
+    if only_complete:
+        rows = [r for r in rows if r.get("pipeline_complete") == "1"]
     values = [_to_float(r.get(col)) for r in rows if r.get(col) not in (None, "")]
     values = [v for v in values if not math.isnan(v) and v > 0]
     if not values:
@@ -161,15 +163,23 @@ def _format_report(rows: list[dict]) -> str:
     per_gesture = _per_gesture_metrics(matrix)
     fpfn = _fp_fn_overall(rows)
     fpfn_light = _fp_fn_by_lighting(rows)
-    proc = _timing_stats(rows, "processing_time_ms")
-    lat = _timing_stats(rows, "gesture_latency_ms")
-    fps = _timing_stats(rows, "fps_rolling")
+
+    n_full = sum(1 for r in rows if r.get("pipeline_complete") == "1")
+    full_pct = (n_full / total * 100.0) if total else 0.0
+
+    proc_all  = _timing_stats(rows, "processing_time_ms")
+    proc_full = _timing_stats(rows, "processing_time_ms", only_complete=True)
+    preproc   = _timing_stats(rows, "preproc_time_ms",    only_complete=True)
+    landmarks = _timing_stats(rows, "landmarks_time_ms",  only_complete=True)
+    gesture   = _timing_stats(rows, "gesture_time_ms",    only_complete=True)
+    fps       = _timing_stats(rows, "fps_rolling")
 
     out = []
     out.append("=" * 72)
     out.append("Performance Report")
     out.append("=" * 72)
     out.append(f"Frames analysed: {total}")
+    out.append(f"Full-pipeline frames: {n_full} ({full_pct:.1f}%)")
     out.append(f"Overall accuracy: {accuracy:.4f}  ({correct}/{total})")
     out.append("")
 
@@ -209,15 +219,18 @@ def _format_report(rows: list[dict]) -> str:
             )
         out.append("")
 
-    out.append("Timing")
+    out.append("Timing  (full-pipeline frames unless marked otherwise)")
     out.append("-" * 72)
     for name, stats in (
-        ("processing_time_ms", proc),
-        ("gesture_latency_ms", lat),
-        ("fps_rolling", fps),
+        ("processing_time_ms (all frames)", proc_all),
+        ("processing_time_ms (full only)",  proc_full),
+        ("  preproc_time_ms",               preproc),
+        ("  landmarks_time_ms",             landmarks),
+        ("  gesture_time_ms",               gesture),
+        ("fps_rolling",                     fps),
     ):
         out.append(
-            f"{name:<22} mean={stats['mean']:.2f}  std={stats['std']:.2f}"
+            f"{name:<36} mean={stats['mean']:.2f}  std={stats['std']:.2f}"
             f"  min={stats['min']:.2f}  max={stats['max']:.2f}  n={stats['count']}"
         )
 
@@ -230,14 +243,21 @@ def _format_markdown(rows: list[dict]) -> str:
     matrix = _build_confusion_matrix(rows)
     accuracy, correct, total = _accuracy(matrix)
     per_gesture = _per_gesture_metrics(matrix)
-    proc = _timing_stats(rows, "processing_time_ms")
-    lat = _timing_stats(rows, "gesture_latency_ms")
-    fps = _timing_stats(rows, "fps_rolling")
+    n_full = sum(1 for r in rows if r.get("pipeline_complete") == "1")
+    full_pct = (n_full / total * 100.0) if total else 0.0
+
+    proc_all  = _timing_stats(rows, "processing_time_ms")
+    proc_full = _timing_stats(rows, "processing_time_ms", only_complete=True)
+    preproc   = _timing_stats(rows, "preproc_time_ms",    only_complete=True)
+    landmarks = _timing_stats(rows, "landmarks_time_ms",  only_complete=True)
+    gesture   = _timing_stats(rows, "gesture_time_ms",    only_complete=True)
+    fps       = _timing_stats(rows, "fps_rolling")
 
     lines = [
         "# Performance Report",
         "",
         f"- Frames analysed: **{total}**",
+        f"- Full-pipeline frames: **{n_full}** ({full_pct:.1f}%)",
         f"- Overall accuracy: **{accuracy:.4f}** ({correct}/{total})",
         "",
         "## Confusion Matrix",
@@ -268,12 +288,23 @@ def _format_markdown(rows: list[dict]) -> str:
         "",
         "## Timing",
         "",
+        "Per-stage timings are over full-pipeline frames only "
+        "(frames where MediaPipe returned a fresh landmark result).",
+        "",
         "| metric | mean | std | min | max | n |",
         "|---|---|---|---|---|---|",
-        f"| processing_time_ms | {proc['mean']:.2f} | {proc['std']:.2f} "
-        f"| {proc['min']:.2f} | {proc['max']:.2f} | {proc['count']} |",
-        f"| gesture_latency_ms | {lat['mean']:.2f} | {lat['std']:.2f} "
-        f"| {lat['min']:.2f} | {lat['max']:.2f} | {lat['count']} |",
+        f"| processing_time_ms (all frames) | {proc_all['mean']:.2f} "
+        f"| {proc_all['std']:.2f} | {proc_all['min']:.2f} "
+        f"| {proc_all['max']:.2f} | {proc_all['count']} |",
+        f"| processing_time_ms (full only) | {proc_full['mean']:.2f} "
+        f"| {proc_full['std']:.2f} | {proc_full['min']:.2f} "
+        f"| {proc_full['max']:.2f} | {proc_full['count']} |",
+        f"| preproc_time_ms | {preproc['mean']:.2f} | {preproc['std']:.2f} "
+        f"| {preproc['min']:.2f} | {preproc['max']:.2f} | {preproc['count']} |",
+        f"| landmarks_time_ms | {landmarks['mean']:.2f} | {landmarks['std']:.2f} "
+        f"| {landmarks['min']:.2f} | {landmarks['max']:.2f} | {landmarks['count']} |",
+        f"| gesture_time_ms | {gesture['mean']:.2f} | {gesture['std']:.2f} "
+        f"| {gesture['min']:.2f} | {gesture['max']:.2f} | {gesture['count']} |",
         f"| fps_rolling | {fps['mean']:.2f} | {fps['std']:.2f} "
         f"| {fps['min']:.2f} | {fps['max']:.2f} | {fps['count']} |",
     ]
