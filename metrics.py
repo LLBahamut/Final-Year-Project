@@ -14,6 +14,17 @@ Why the metrics matter:
   one gesture for another, or fires when the user is doing nothing at all.
 - **Lighting tags** let us measure whether adaptive preprocessing actually
   preserves accuracy across illumination conditions.
+
+Note on ``processing_time_ms``: the timer is started in ``start_frame()``,
+which the caller invokes immediately BEFORE ``cap.read()``. This makes the
+per-frame processing time include camera capture latency. The timer ends
+inside ``mark_gesture_done()`` once the gesture decision (and any associated
+keypress dispatch) has completed.
+
+The ``pipeline_complete`` flag distinguishes frames where MediaPipe's async
+landmark callback returned a fresh result (full pipeline ran) from frames
+where it had not yet fired (preprocessing only). Reporting these separately
+is essential — mixing them produces a meaningless mean.
 """
 
 from __future__ import annotations
@@ -41,7 +52,7 @@ class _FrameRecord:
     preproc_time_ms: float = 0.0
     landmarks_time_ms: float = 0.0
     gesture_time_ms: float = 0.0
-    gesture_latency_ms: float = 0.0
+    pipeline_complete: int = 0
     predicted_label: str = "none"
     ground_truth_label: str = "none"
     lighting_condition: str = "normal"
@@ -61,11 +72,15 @@ class PerformanceLogger:
 
     Lifecycle (one cycle per frame):
 
-        logger.start_frame()
-        # capture happens here (logger uses its own clock)
+        logger.start_frame()       # call BEFORE cap.read()
+        # ... cap.read() and process_frame() happen here ...
         logger.mark_preproc_done()
         logger.mark_landmarks_done()
-        logger.mark_gesture_done(predicted_label, events_fired=...)
+        logger.mark_gesture_done(predicted_label, pipeline_complete=...)
+
+    Pass ``pipeline_complete=False`` on frames where MediaPipe's async result
+    was not yet available, so analysis can separate full-pipeline frames from
+    preprocessing-only frames.
 
     The logger flushes accumulated rows to CSV every ``flush_every`` frames
     so a long session does not sit on a giant in-memory buffer, and the file
@@ -128,6 +143,8 @@ class PerformanceLogger:
     # ------------------------------------------------------------------
 
     def start_frame(self, frame_id: Optional[int] = None) -> None:
+        """Stamp t_capture. Call IMMEDIATELY BEFORE ``cap.read()`` so that
+        camera capture latency is included in ``processing_time_ms``."""
         now = time.perf_counter()
         if self._last_capture is not None:
             self._frame_durations.append(now - self._last_capture)
@@ -159,23 +176,23 @@ class PerformanceLogger:
         self,
         pred_label: str,
         events_fired: Optional[str] = None,
+        pipeline_complete: bool = True,
     ) -> None:
+        """End-of-frame hook. ``pipeline_complete`` should be False on frames
+        where MediaPipe's async result was not available, so analysis can
+        separate them from full-pipeline frames."""
         if self._current is None:
             return
         rec = self._current
         rec.t_gesture_done = time.perf_counter()
         rec.predicted_label = pred_label if pred_label in _GESTURE_LABELS else "none"
         rec.events_fired = events_fired or ""
+        rec.pipeline_complete = 1 if pipeline_complete else 0
 
         rec.processing_time_ms = (rec.t_gesture_done - rec.t_capture) * 1000.0
         rec.preproc_time_ms = (rec.t_preproc_done - rec.t_capture) * 1000.0
         rec.landmarks_time_ms = (rec.t_landmarks_done - rec.t_preproc_done) * 1000.0
         rec.gesture_time_ms = (rec.t_gesture_done - rec.t_landmarks_done) * 1000.0
-        # End-to-end latency: capture → events committed at end of pipeline.
-        # Conservative upper bound — the actual pynput call is dispatched
-        # inside process_*_hand before mark_gesture_done fires, so the real
-        # latency is slightly lower.
-        rec.gesture_latency_ms = rec.processing_time_ms
 
         rec.brightness_smoothed = float(self._preproc_flags["brightness_smoothed"])
         rec.clahe_applied = int(self._preproc_flags["clahe_applied"])
@@ -233,7 +250,7 @@ class NullLogger:
     def start_frame(self, frame_id=None): pass
     def mark_preproc_done(self, preproc_flags=None): pass
     def mark_landmarks_done(self): pass
-    def mark_gesture_done(self, pred_label, events_fired=None): pass
+    def mark_gesture_done(self, pred_label, events_fired=None, pipeline_complete=True): pass
     def get_rolling_fps(self): return 0.0
     def get_last_processing_ms(self): return 0.0
     def flush(self): pass
