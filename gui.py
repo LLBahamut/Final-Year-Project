@@ -419,7 +419,7 @@ def _make_confidence_row(name: str, hint: str, value: float):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gesture Recognition — Settings")
+        self.setWindowTitle("LumineGstr")
         self.setMinimumWidth(520)
         self.setMaximumWidth(680)
         self._set_window_icon()
