@@ -76,10 +76,6 @@ GESTURE_DISPLAY_NAMES = {
     "point":    "POINT",
 }
 
-# Translate processor-internal gesture names to the canonical labels used by
-# the metrics module (`metrics._GESTURE_LABELS`). Without this, predictions
-# of "thumbsup" and "palm" would be silently downgraded to "none" by the
-# logger's label-validation check, badly distorting the confusion matrix.
 GESTURE_NAME_MAP = {
     "thumbsup": "thumbs_up",
     "palm":     "flat_palm",
@@ -781,6 +777,13 @@ class GestureProcessor:
         self.right_hand_gesture_state["confirm_count"]   = 0
         self.right_hand_gesture_state["release_count"]   = 0
 
+    def reset_right_hand_gesture(self):
+        """Clear the right-hand debouncer state. Called on metrics-pause
+        RESUME so the next recording window starts from a clean state and
+        stale confirm/release counts from before the pause cannot leak across
+        the boundary. Releases any held key as a side effect."""
+        self.release_right_hand_gesture_key()
+
     # ------------------------------------------------------------------
     # Drawing
     # ------------------------------------------------------------------
@@ -1082,7 +1085,6 @@ class GestureProcessor:
 
         result = self.get_latest_result()
         self._logger.mark_landmarks_done()
-        pipeline_complete = result is not None
         if result is not None:
             self._consecutive_none_frames = 0
             self._last_drawn_result = result        # refresh cache
@@ -1106,16 +1108,14 @@ class GestureProcessor:
 
         self.draw_wasd_overlay(frame)
 
-        # Translate the processor's internal gesture name ("thumbsup"/"palm")
-        # to the canonical label the metrics module recognises ("thumbs_up"/
-        # "flat_palm"). Anything unmapped, or None, becomes "none".
         raw_gesture = self.right_hand_gesture_state.get("active_gesture")
         pred = GESTURE_NAME_MAP.get(raw_gesture, raw_gesture) or "none"
+
         active_key = self.right_hand_gesture_state.get("active_key")
+
         self._logger.mark_gesture_done(
             pred,
             events_fired=str(active_key or ""),
-            pipeline_complete=pipeline_complete,
         )
 
         return frame
