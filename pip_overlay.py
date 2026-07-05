@@ -67,14 +67,11 @@ class CameraWorker(QThread):
     error       = pyqtSignal(str)
     stopped     = pyqtSignal()
 
-    # FIX (camera crash): only abort after this many *consecutive* cap.read()
-    # failures.  Cameras can drop individual frames on USB bandwidth spikes or
-    # driver hiccups — one failure should never kill the session.
+    # Only abort after this many consecutive cap.read() failures — a single
+    # dropped frame (USB bandwidth spike, driver hiccup) shouldn't kill the session.
     _MAX_CONSECUTIVE_FAILURES = 5
 
-    # FIX (camera crash): cap the loop at 30 fps.  Without this the loop spins
-    # at full CPU speed, which overwhelms the camera driver over time
-    # (especially at 1920x1080) and eventually causes sustained read failures.
+    # Caps the loop so it doesn't spin the camera driver at full CPU speed.
     _TARGET_FPS      = 30
     _TARGET_INTERVAL = 1.0 / _TARGET_FPS
 
@@ -148,8 +145,6 @@ class CameraWorker(QThread):
                 self.frame_ready.emit(qimg)
 
                 # Rate cap: sleep the remaining time to hit TARGET_FPS.
-                # Prevents the loop from spinning faster than the camera can
-                # deliver frames and stressing the driver.
                 elapsed   = time.time() - frame_start
                 remaining = self._TARGET_INTERVAL - elapsed
                 if remaining > 0:

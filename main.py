@@ -17,11 +17,7 @@ _GT_KEYMAP = {ord(str(i)): GESTURE_LABELS[i] for i in range(len(GESTURE_LABELS))
 
 
 def _draw_paused_indicator(frame, paused: bool):
-    """Overlay a status badge in the top-right corner so the recorder can
-    always tell at a glance whether the CSV is being written.
-
-    RED 'REC' when actively logging, GRAY 'PAUSED' otherwise. Drawn directly
-    on the displayed frame after process_frame() and draw_fps() have run."""
+    """Overlay a red 'REC' / gray 'PAUSED' status badge in the top-right corner."""
     if frame is None:
         return
     label = "REC" if not paused else "PAUSED"
@@ -29,7 +25,6 @@ def _draw_paused_indicator(frame, paused: bool):
     text_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
     x = frame.shape[1] - text_size[0] - 20
     y = 35
-    # Filled dot for REC, hollow square for PAUSED — extra visual cue
     if not paused:
         cv2.circle(frame, (x - 18, y - 6), 8, color, -1)
     else:
@@ -50,8 +45,7 @@ def main():
     proc = GestureProcessor(cfg)
 
     if cfg.enable_metrics_logging:
-        # start_paused=True: session opens muted so warmup frames don't pollute
-        # the CSV. Press 'p' once you're ready to record the first gesture.
+        # Starts paused so warmup frames don't pollute the CSV; press 'p' to record.
         logger = PerformanceLogger(
             output_dir=cfg.metrics_output_dir,
             session_label=cfg.metrics_session_label,
@@ -109,9 +103,7 @@ def main():
     while True:
         frame_start = time.time()
 
-        # Start the metrics timer BEFORE cap.read() so camera capture latency
-        # is included in processing_time_ms. The logger is a NullLogger no-op
-        # when metrics are disabled, so this is free in the non-eval path.
+        # Started before cap.read() so processing_time_ms includes capture latency.
         logger.start_frame()
         ret, frame = cap.read()
         if not ret:
@@ -136,8 +128,6 @@ def main():
         prev_time = now
         proc.draw_fps(annotated, fps)
 
-        # Recording-status indicator. Always drawn so the recorder can see at
-        # a glance whether the CSV is being written. Cheap (a single putText).
         _draw_paused_indicator(annotated, logger.is_paused())
 
         cv2.imshow("Gesture Controller", annotated)
@@ -149,15 +139,10 @@ def main():
         elif key == ord("r"):
             proc.reset_control()
         elif key == ord("p"):
-            # Toggle pause. On RESUME, also reset the right-hand gesture
-            # debouncer so the next recording window starts from a clean
-            # state — otherwise stale 'confirming' counts from before the
-            # pause could leak across the boundary and contaminate the
-            # first few frames after resume.
             new_state = not logger.is_paused()
             logger.set_paused(new_state)
             if not new_state:
-                # Resuming — clear the debouncer.
+                # Clear the debouncer on resume so stale counts don't leak in.
                 proc.reset_right_hand_gesture()
             if cfg.enable_metrics_logging:
                 print(f"Metrics logging {'PAUSED' if new_state else 'RESUMED'}")
@@ -172,7 +157,7 @@ def main():
             if cfg.enable_metrics_logging:
                 print(f"Lighting condition → {LIGHTING_LABELS[lighting_idx]}")
 
-        # Rate cap — keep loop at TARGET_FPS, don't overwhelm the driver
+        # Rate cap: hold the loop at TARGET_FPS.
         elapsed   = time.time() - frame_start
         remaining = _TARGET_INTERVAL - elapsed
         if remaining > 0:

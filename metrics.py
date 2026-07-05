@@ -1,36 +1,17 @@
 """Performance instrumentation for the gesture-recognition pipeline.
 
-This module is fully optional — the rest of the codebase is built so that a
-disabled logger is a zero-cost no-op. When enabled, it records per-frame
-timings, predictions, ground-truth labels, lighting metadata, and the state of
-the adaptive preprocessing path, then writes everything to a CSV for offline
-analysis with ``evaluate_metrics.py``.
+Optional — a disabled logger (NullLogger) is a zero-cost no-op. When enabled,
+records per-frame timings, predictions, ground-truth labels, lighting metadata,
+and adaptive-preprocessing state to a CSV for offline analysis with
+``evaluate_metrics.py``.
 
-Why the metrics matter:
-- **Processing time / FPS** show whether the pipeline can sustain real-time
-  control on the target hardware; latency spikes break the feel of direct
-  manipulation.
-- **Confusion matrix / FP / FN** quantify how often the classifier confuses
-  one gesture for another, or fires when the user is doing nothing at all.
-- **Lighting tags** let us measure whether adaptive preprocessing actually
-  preserves accuracy across illumination conditions.
-
-Note on ``processing_time_ms``: the timer is started in ``start_frame()``,
-which the caller invokes immediately BEFORE ``cap.read()``. This makes the
-per-frame processing time include camera capture latency. The timer ends
-inside ``mark_gesture_done()`` once the gesture decision (and any associated
-keypress dispatch) has completed.
-
-The ``pipeline_complete`` flag distinguishes frames where MediaPipe's async
-landmark callback returned a fresh result (full pipeline ran) from frames
-where it had not yet fired (preprocessing only). Reporting these separately
-is essential — mixing them produces a meaningless mean.
-
-Pause support: ``set_paused(True)`` mutes the logger. While paused, the
-pipeline continues running normally, but ``mark_gesture_done`` discards
-the in-progress record instead of writing it. Use this during ground-truth
-transitions to exclude boundary frames from evaluation without any
-post-processing.
+``processing_time_ms`` starts counting in ``start_frame()`` (called before
+``cap.read()``, so capture latency is included) and ends in
+``mark_gesture_done()``. ``pipeline_complete`` separates frames where
+MediaPipe's async callback returned a fresh result from preprocessing-only
+frames, since mixing them produces a meaningless mean. ``set_paused(True)``
+mutes CSV writes (e.g. during ground-truth transitions) without pausing the
+pipeline itself.
 """
 
 from __future__ import annotations
@@ -76,25 +57,11 @@ _CSV_FIELDS = list(asdict(_FrameRecord()).keys())
 class PerformanceLogger:
     """Per-frame timing and accuracy logger.
 
-    Lifecycle (one cycle per frame):
-
-        logger.start_frame()       # call BEFORE cap.read()
-        # ... cap.read() and process_frame() happen here ...
-        logger.mark_preproc_done()
-        logger.mark_landmarks_done()
-        logger.mark_gesture_done(predicted_label, pipeline_complete=...)
-
-    Pass ``pipeline_complete=False`` on frames where MediaPipe's async result
-    was not yet available, so analysis can separate full-pipeline frames from
-    preprocessing-only frames.
-
-    Call ``set_paused(True)`` to silence the logger during gesture transitions.
-    The pipeline keeps running but no rows are written to the CSV; call
-    ``set_paused(False)`` to resume.
-
-    The logger flushes accumulated rows to CSV every ``flush_every`` frames
-    so a long session does not sit on a giant in-memory buffer, and the file
-    is closed cleanly via ``close()``.
+    Lifecycle per frame: ``start_frame()`` (before ``cap.read()``) →
+    ``mark_preproc_done()`` → ``mark_landmarks_done()`` →
+    ``mark_gesture_done(predicted_label, pipeline_complete=...)``.
+    Rows flush to CSV every ``flush_every`` frames; ``close()`` flushes and
+    closes the file.
     """
 
     def __init__(
@@ -151,9 +118,7 @@ class PerformanceLogger:
             self._lighting = condition
 
     def set_paused(self, paused: bool) -> None:
-        """Mute (True) or unmute (False) CSV writes. Pipeline keeps running
-        either way. Any in-progress record at the moment of pausing is
-        discarded by ``mark_gesture_done``."""
+        """Mute (True) or unmute (False) CSV writes. Pipeline keeps running either way."""
         self._paused = bool(paused)
 
     def is_paused(self) -> bool:
@@ -164,8 +129,7 @@ class PerformanceLogger:
     # ------------------------------------------------------------------
 
     def start_frame(self, frame_id: Optional[int] = None) -> None:
-        """Stamp t_capture. Call IMMEDIATELY BEFORE ``cap.read()`` so that
-        camera capture latency is included in ``processing_time_ms``."""
+        """Stamp t_capture. Call immediately before ``cap.read()``."""
         now = time.perf_counter()
         if self._last_capture is not None:
             self._frame_durations.append(now - self._last_capture)
@@ -199,17 +163,10 @@ class PerformanceLogger:
         events_fired: Optional[str] = None,
         pipeline_complete: bool = True,
     ) -> None:
-        """End-of-frame hook. ``pipeline_complete`` should be False on frames
-        where MediaPipe's async result was not available, so analysis can
-        separate them from full-pipeline frames.
-
-        While paused, the in-progress record is discarded — nothing is written
-        to the CSV. Rolling FPS tracking still updates via ``start_frame``
-        regardless of pause state, so resume timing is accurate."""
+        """End-of-frame hook. Discards the in-progress record while paused."""
         if self._current is None:
             return
         if self._paused:
-            # Drop the record on the floor; pipeline keeps running.
             self._current = None
             return
         rec = self._current

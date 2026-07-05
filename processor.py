@@ -92,8 +92,7 @@ class GestureProcessor:
         self._result_lock = threading.Lock()
         self._detection_result = None
 
-        # FIX (flickering): cache the last valid detection result so landmarks
-        # are drawn every frame even when detect_async hasn't fired yet.
+        # Cached across frames to avoid landmark flicker while detect_async is pending.
         self._last_drawn_result = None
 
         # Input controllers
@@ -370,28 +369,23 @@ class GestureProcessor:
         wrist = hand_landmarks[0]
         middle_mcp = hand_landmarks[9]  # palm center reference
 
-        # Check 1: Thumb must be physically straight (not folded in a fist).
-        # Tighter threshold — a fist-wrapped thumb still scores ~0.7-0.8.
+        # Straightness threshold tight enough that a fist-wrapped thumb (~0.7-0.8) fails.
         if self._finger_straightness(hand_landmarks, [1, 2, 3, 4]) < 0.85:
             return False
 
-        # Hand size reference — wrist to middle MCP — used to normalise the
-        # remaining geometric checks so they work at any camera distance.
+        # Hand size (wrist to middle MCP) normalises the checks below to camera distance.
         dx, dy, dz = (wrist.x - middle_mcp.x), (wrist.y - middle_mcp.y), (wrist.z - middle_mcp.z)
         hand_size = (dx*dx + dy*dy + dz*dz) ** 0.5
         if hand_size < 1e-7:
             return False
 
-        # Check 2: Thumb tip must be significantly ABOVE the palm centre
-        # (middle MCP), scaled to hand size. In a fist the thumb wraps across
-        # the palm so thumb_tip.y ≈ middle_mcp.y, failing this check.
+        # In a fist the thumb wraps across the palm, so thumb_tip.y ≈ middle_mcp.y.
         vertical_above = middle_mcp.y - thumb_tip.y   # positive = above
         if vertical_above < 0.5 * hand_size:
             return False
 
-        # Check 3: Thumb tip must be the HIGHEST point on the hand (above
-        # every other fingertip). Curled fingertips in a fist sit near palm
-        # height, so this catches any leftover fist false positives.
+        # Curled fingertips in a fist sit near palm height, so requiring the thumb
+        # to be the highest point catches any remaining fist false positives.
         min_finger_tip_y = min(hand_landmarks[i].y for i in (8, 12, 16, 20))
         if thumb_tip.y >= min_finger_tip_y:
             return False
@@ -424,14 +418,8 @@ class GestureProcessor:
         )
 
     def is_point(self, hand_landmarks):
-        """Index extended, middle/ring/pinky curled. Thumb state ignored.
-
-        Index extension uses bone-chain straightness, which is direction-
-        agnostic — pointing up/down/sideways/toward-the-camera all work.
-        The thumb is deliberately not checked because many people point
-        with the thumb extended (gun shape) or tucked alongside — neither
-        should block the gesture. Thumbs-up is rejected upstream by
-        classify_right_hand_gesture's priority order."""
+        """Index extended, middle/ring/pinky curled. Thumb state ignored since
+        people point with the thumb either extended (gun shape) or tucked."""
         if self._finger_straightness(hand_landmarks, [5, 6, 7, 8]) < 0.80:
             return False
         return (
@@ -778,10 +766,8 @@ class GestureProcessor:
         self.right_hand_gesture_state["release_count"]   = 0
 
     def reset_right_hand_gesture(self):
-        """Clear the right-hand debouncer state. Called on metrics-pause
-        RESUME so the next recording window starts from a clean state and
-        stale confirm/release counts from before the pause cannot leak across
-        the boundary. Releases any held key as a side effect."""
+        """Clear the right-hand debouncer state so stale counts don't leak across
+        a metrics-pause resume. Releases any held key as a side effect."""
         self.release_right_hand_gesture_key()
 
     # ------------------------------------------------------------------
@@ -976,16 +962,7 @@ class GestureProcessor:
     # ------------------------------------------------------------------
 
     def _preprocess_frame(self, frame):
-        """Optional lighting normalisation. No-op when all toggles are off.
-
-        Order of operations:
-          1. Measure mean luminance (grayscale mean, EMA-smoothed).
-          2. Auto mode (meta-controller): decides whether to brighten/darken
-             and computes an adaptive gamma targeting cfg.preprocess_auto_target.
-             When the frame is in the "normal" band, auto skips preprocessing.
-          3. CLAHE on L channel of LAB (if enabled or auto requested).
-          4. Gamma LUT (if enabled or auto requested).
-        """
+        """Optional lighting normalisation (CLAHE + gamma, auto-tuned by luminance). No-op when all toggles are off."""
         cfg = self.cfg
         clahe_on = cfg.preprocess_clahe_enabled
         gamma_on = cfg.preprocess_gamma_enabled
@@ -1044,9 +1021,7 @@ class GestureProcessor:
             frame = cv2.LUT(frame, self._get_gamma_lut(gamma_val))
             flags["gamma_applied"] = 1
 
-        # Bilateral denoise only on the auto-dark path — brightening amplifies
-        # sensor noise and MediaPipe's landmark quality drops with grainy
-        # pixels. Small d keeps the cost low (~4-6 ms at 1080p).
+        # Only on the auto-dark path: brightening amplifies sensor noise.
         if denoise_on:
             frame = cv2.bilateralFilter(frame, d=5, sigmaColor=40, sigmaSpace=40)
             flags["denoise_applied"] = 1
@@ -1056,17 +1031,9 @@ class GestureProcessor:
     def process_frame(self, frame):
         """Full processing pipeline for a single frame.
 
-        Flips the frame, queues it with MediaPipe detect_async, then:
-        - Updates the cached result when a fresh callback has fired.
-        - Runs gesture/control logic ONLY on fresh results (no redundant updates).
-        - Draws landmarks from the CACHED result every frame (fixes flickering).
-
-        Background: detect_async is non-blocking — the result_callback fires on
-        MediaPipe's internal thread some time later.  Calling get_latest_result()
-        immediately after detect_async frequently returns None (callback hasn't
-        fired yet), which used to cause every other frame to skip drawing, creating
-        the visible flicker.  Caching the last valid result and always drawing from
-        it eliminates the skip entirely.
+        Flips the frame, queues it with MediaPipe detect_async, runs gesture/control
+        logic only on fresh results, and draws landmarks from the cached result every
+        frame so a pending detect_async callback never causes a flicker.
         """
         frame = cv2.flip(frame, 1)
         frame = self._preprocess_frame(frame)
@@ -1095,8 +1062,7 @@ class GestureProcessor:
                 if self.cfg.enable_debug_output:
                     print(f"Frame processing error: {e}")
         else:
-            # Async callback hasn't fired yet — tolerate brief gaps.
-            # Only force-release after prolonged silence (camera disconnect, etc.)
+            # Tolerate brief gaps; force-release only after prolonged silence.
             self._consecutive_none_frames += 1
             if self._consecutive_none_frames >= self.cfg.async_result_timeout_frames:
                 self.release_all_keys()
